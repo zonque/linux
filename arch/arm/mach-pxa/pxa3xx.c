@@ -144,6 +144,15 @@ static void pxa3xx_cpu_pm_suspend(void)
 
 	extern void pxa3xx_cpu_suspend(long);
 
+	/* HACK! Work around a hardware bug on the remote control: do not go
+	 * to suspend if we have a stuck high IRQ line at this point.
+	 * GPIO32 is TOUCH_INT */
+	{
+		#include <asm/mach-types.h>
+		if (machine_is_raumfeld_rc() && !!gpio_get_value(32))
+			return;
+	}
+
 	/* resuming from D2 requires the HSIO2/BOOT/TPM clocks enabled */
 	CKENA |= (1 << CKEN_BOOT) | (1 << CKEN_TPM);
 	CKENB |= 1 << (CKEN_HSIO2 & 0x1f);
