@@ -234,12 +234,12 @@ static enum VIA_HDA_CODEC get_codec_type(struct hda_codec *codec)
 	return codec_type;
 };
 
+#define VIA_JACK_EVENT		0x20
 #define VIA_HP_EVENT		0x01
 #define VIA_GPIO_EVENT		0x02
-#define VIA_JACK_EVENT		0x04
-#define VIA_MONO_EVENT		0x08
-#define VIA_SPEAKER_EVENT	0x10
-#define VIA_BIND_HP_EVENT	0x20
+#define VIA_MONO_EVENT		0x03
+#define VIA_SPEAKER_EVENT	0x04
+#define VIA_BIND_HP_EVENT	0x05
 
 enum {
 	VIA_CTL_WIDGET_VOL,
@@ -708,6 +708,9 @@ static hda_nid_t side_mute_channel(struct via_spec *spec)
 	case VT1709_10CH:	return 0x29;
 	case VT1708B_8CH:	/* fall thru */
 	case VT1708S:		return 0x27;
+	case VT2002P:		return 0x19;
+	case VT1802:		return 0x15;
+	case VT1812:		return 0x15;
 	default:		return 0;
 	}
 }
@@ -716,13 +719,22 @@ static int update_side_mute_status(struct hda_codec *codec)
 {
 	/* mute side channel */
 	struct via_spec *spec = codec->spec;
-	unsigned int parm = spec->hp_independent_mode
-		? AMP_OUT_MUTE : AMP_OUT_UNMUTE;
+	unsigned int parm;
 	hda_nid_t sw3 = side_mute_channel(spec);
 
-	if (sw3)
-		snd_hda_codec_write(codec, sw3, 0, AC_VERB_SET_AMP_GAIN_MUTE,
-				    parm);
+	if (sw3) {
+		if (VT2002P_COMPATIBLE(spec))
+			parm = spec->hp_independent_mode ?
+			       AMP_IN_MUTE(1) : AMP_IN_UNMUTE(1);
+		else
+			parm = spec->hp_independent_mode ?
+			       AMP_OUT_MUTE : AMP_OUT_UNMUTE;
+		snd_hda_codec_write(codec, sw3, 0,
+				    AC_VERB_SET_AMP_GAIN_MUTE, parm);
+		if (spec->codec_type == VT1812)
+			snd_hda_codec_write(codec, 0x1d, 0,
+					    AC_VERB_SET_AMP_GAIN_MUTE, parm);
+	}
 	return 0;
 }
 
@@ -1188,6 +1200,8 @@ static struct hda_verb vt1708_volume_init_verbs[] = {
 	{0x20, AC_VERB_SET_CONNECT_SEL, 0},
 	/* PW9 Output enable */
 	{0x25, AC_VERB_SET_PIN_WIDGET_CONTROL, 0x40},
+	/* power down jack detect function */
+	{0x1, 0xf81, 0x1},
 	{ }
 };
 
@@ -1673,7 +1687,7 @@ static void via_speaker_automute(struct hda_codec *codec)
 	unsigned int hp_present;
 	struct via_spec *spec = codec->spec;
 
-	if (spec->codec_type != VT2002P && spec->codec_type != VT1812)
+	if (!VT2002P_COMPATIBLE(spec))
 		return;
 
 	hp_present = snd_hda_jack_detect(codec, spec->autocfg.hp_pins[0]);
@@ -1732,17 +1746,21 @@ static void via_unsol_event(struct hda_codec *codec,
 				  unsigned int res)
 {
 	res >>= 26;
-	if (res & VIA_HP_EVENT)
-		via_hp_automute(codec);
-	if (res & VIA_GPIO_EVENT)
-		via_gpio_control(codec);
+
 	if (res & VIA_JACK_EVENT)
 		set_widgets_power_state(codec);
-	if (res & VIA_MONO_EVENT)
+
+	res &= ~VIA_JACK_EVENT;
+
+	if (res == VIA_HP_EVENT)
+		via_hp_automute(codec);
+	else if (res == VIA_GPIO_EVENT)
+		via_gpio_control(codec);
+	else if (res == VIA_MONO_EVENT)
 		via_mono_automute(codec);
-	if (res & VIA_SPEAKER_EVENT)
+	else if (res == VIA_SPEAKER_EVENT)
 		via_speaker_automute(codec);
-	if (res & VIA_BIND_HP_EVENT)
+	else if (res == VIA_BIND_HP_EVENT)
 		via_hp_bind_automute(codec);
 }
 
@@ -4241,7 +4259,8 @@ static struct hda_verb vt1718S_volume_init_verbs[] = {
 	{0x10, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(0)},
 	{0x11, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(0)},
 
-
+	/* Enable MW0 adjust Gain 5 */
+	{0x1, 0xfb2, 0x10},
 	/* Mute input amps (CD, Line In, Mic 1 & Mic 2) of the analog-loopback
 	 * mixer widget
 	 */
@@ -4250,7 +4269,7 @@ static struct hda_verb vt1718S_volume_init_verbs[] = {
 	{0x21, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(1)},
 	{0x21, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(2)},
 	{0x21, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(3)},
-	{0x21, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(5)},
+	{0x21, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(5)},
 
 	/* Setup default input of Front HP to MW9 */
 	{0x28, AC_VERB_SET_CONNECT_SEL, 0x1},
@@ -5252,6 +5271,10 @@ static struct snd_kcontrol_new vt2002P_capture_mixer[] = {
 };
 
 static struct hda_verb vt2002P_volume_init_verbs[] = {
+	/* Class-D speaker related verbs */
+	{0x1, 0xfe0, 0x4},
+	{0x1, 0xfe9, 0x80},
+	{0x1, 0xfe2, 0x22},
 	/*
 	 * Unmute ADC0-1 and set the default input to mic-in
 	 */
