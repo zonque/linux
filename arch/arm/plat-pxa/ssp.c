@@ -44,7 +44,7 @@ struct ssp_device *pxa_ssp_request(int port, const char *label)
 	mutex_lock(&ssp_lock);
 
 	list_for_each_entry(ssp, &ssp_list, node) {
-		if (ssp->port_id == port && ssp->use_count == 0) {
+		if (ssp->port_id == port /* && ssp->use_count == 0 */) {
 			ssp->use_count++;
 			ssp->label = label;
 			break;
