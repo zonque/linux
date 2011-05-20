@@ -152,6 +152,8 @@ config SND_SOC_RAUMFELD
 	select SND_PXA_SOC_SSP
 	select SND_SOC_CS4270
 	select SND_SOC_AK4104
+	select SND_SOC_STA32X
+	select SND_SOC_WM8782
 	help
 	  Say Y if you want to add support for SoC audio on Raumfeld devices
 
