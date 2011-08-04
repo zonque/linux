@@ -779,7 +779,8 @@ void radeon_combios_i2c_init(struct radeon_device *rdev)
 				}
 			}
 		}
-	} else if (rdev->family >= CHIP_R200) {
+	} else if ((rdev->family == CHIP_R200) ||
+		   (rdev->family >= CHIP_R300)) {
 		/* 0x68 */
 		i2c = combios_setup_i2c_bus(rdev, DDC_MONID, 0, 0);
 		rdev->i2c_bus[3] = radeon_i2c_create(dev, &i2c, "MONID");
@@ -865,6 +866,11 @@ bool radeon_combios_get_clock_info(struct drm_device *dev)
 
 		rdev->clock.default_sclk = sclk;
 		rdev->clock.default_mclk = mclk;
+
+		if (RBIOS32(pll_info + 0x16))
+			rdev->clock.max_pixel_clock = RBIOS32(pll_info + 0x16);
+		else
+			rdev->clock.max_pixel_clock = 35000; /* might need something asic specific */
 
 		return true;
 	}
@@ -1548,10 +1554,12 @@ bool radeon_get_legacy_connector_info_from_table(struct drm_device *dev)
 			   (rdev->pdev->subsystem_device == 0x4a48)) {
 			/* Mac X800 */
 			rdev->mode_info.connector_table = CT_MAC_X800;
-		} else if ((rdev->pdev->device == 0x4150) &&
+		} else if ((of_machine_is_compatible("PowerMac7,2") ||
+			    of_machine_is_compatible("PowerMac7,3")) &&
+			   (rdev->pdev->device == 0x4150) &&
 			   (rdev->pdev->subsystem_vendor == 0x1002) &&
 			   (rdev->pdev->subsystem_device == 0x4150)) {
-			/* Mac G5 9600 */
+			/* Mac G5 tower 9600 */
 			rdev->mode_info.connector_table = CT_MAC_G5_9600;
 		} else
 #endif /* CONFIG_PPC_PMAC */
