@@ -754,7 +754,7 @@ static u8 snd_fm801_tea575x_get_pins(struct snd_tea575x *tea)
 {
 	struct fm801 *chip = tea->private_data;
 	unsigned short reg = inw(FM801_REG(chip, GPIO_CTRL));
-	struct snd_fm801_tea575x_gpio gpio = *get_tea575x_gpio(chip)
+	struct snd_fm801_tea575x_gpio gpio = *get_tea575x_gpio(chip);
 
 	return  (reg & FM801_GPIO_GP(gpio.data)) ? TEA575X_DATA : 0 |
 		(reg & FM801_GPIO_GP(gpio.most)) ? TEA575X_MOST : 0;
@@ -1249,7 +1249,7 @@ static int __devinit snd_fm801_create(struct snd_card *card,
 			chip->tea575x_tuner = tea575x_tuner;
 			if (!snd_tea575x_init(&chip->tea)) {
 				snd_printk(KERN_INFO "detected TEA575x radio type %s\n",
-					   get_tea57x_gpio(chip)->name);
+					   get_tea575x_gpio(chip)->name);
 				break;
 			}
 		}
