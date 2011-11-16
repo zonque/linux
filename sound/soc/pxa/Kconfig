@@ -157,6 +157,15 @@ config SND_SOC_RAUMFELD
 	help
 	  Say Y if you want to add support for SoC audio on Raumfeld devices
 
+config SND_SOC_RAUMFELD_DDX
+	tristate "SoC Audio support Raumfeld DDX systems"
+	depends on SND_PXA2XX_SOC && (MACH_RAUMFELD_SPEAKER || MACH_RAUMFELD_CONNECTOR)
+	select SND_PXA_SOC_SSP
+	select SND_SOC_STA32X
+	select SND_SOC_WM8782
+	help
+	  Say Y if you want to add support for SoC audio on Raumfeld DDX devices
+
 config SND_PXA2XX_SOC_HX4700
 	tristate "SoC Audio support for HP iPAQ hx4700"
 	depends on SND_PXA2XX_SOC && MACH_H4700
