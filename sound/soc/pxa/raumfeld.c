@@ -266,7 +266,33 @@ static struct snd_soc_card snd_soc_raumfeld_connector = {
 	.resume_pre	= raumfeld_analog_resume,
 };
 
+static int raumfeld_audio_probe(struct snd_soc_card *card)
+{
+	printk(KERN_ERR "%s()\n", __func__);
+	max9486_client = i2c_new_device(i2c_get_adapter(0),
+					&max9486_hwmon_info);
+
+	if (!max9486_client)
+		return -ENOMEM;
+
+	set_max9485_clk(MAX9485_MCLK_FREQ_122880);
+
+	return 0;
+}
+
+static int raumfeld_audio_remove(struct snd_soc_card *card)
+{
+	i2c_unregister_device(max9486_client);
+
+	gpio_free(GPIO_MCLK_RESET);
+	gpio_free(GPIO_CODEC_RESET);
+	gpio_free(GPIO_SPDIF_RESET);
+	return 0;
+}
+
 static struct snd_soc_card snd_soc_raumfeld_speaker = {
+	.probe		= raumfeld_audio_probe,
+	.remove		= raumfeld_audio_remove,
 	.name		= "Raumfeld Speaker",
 	.dai_link	= snd_soc_raumfeld_speaker_dai,
 	.num_links	= ARRAY_SIZE(snd_soc_raumfeld_speaker_dai),
@@ -283,14 +309,6 @@ static int __init raumfeld_audio_init(void)
 	if (!machine_is_raumfeld_speaker() &&
 	    !machine_is_raumfeld_connector())
 		return 0;
-
-	max9486_client = i2c_new_device(i2c_get_adapter(0),
-					&max9486_hwmon_info);
-
-	if (!max9486_client)
-		return -ENOMEM;
-
-	set_max9485_clk(MAX9485_MCLK_FREQ_122880);
 
 	/* Register analog device */
 	raumfeld_audio_device = platform_device_alloc("soc-audio", 0);
@@ -318,14 +336,7 @@ static int __init raumfeld_audio_init(void)
 static void __exit raumfeld_audio_exit(void)
 {
 	raumfeld_enable_audio(false);
-
 	platform_device_unregister(raumfeld_audio_device);
-
-	i2c_unregister_device(max9486_client);
-
-	gpio_free(GPIO_MCLK_RESET);
-	gpio_free(GPIO_CODEC_RESET);
-	gpio_free(GPIO_SPDIF_RESET);
 }
 
 module_init(raumfeld_audio_init);

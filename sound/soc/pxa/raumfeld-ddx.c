@@ -226,7 +226,34 @@ static struct snd_soc_dai_link snd_soc_raumfeld_ddx_dai[] =
 	DAI_LINK_WM8782,
 };
 
+static struct platform_device *raumfeld_audio_device, *wm8782_device;
+
+static int raumfeld_ddx_audio_probe(struct snd_soc_card *card)
+{
+	printk(KERN_ERR "%s()\n", __func__);
+
+	wm8782_device = platform_device_alloc("wm8782", 0);
+	if (!wm8782_device)
+		return -ENOMEM;
+
+	platform_device_add(wm8782_device);
+	raumfeld_enable_audio(true);
+
+	return 0;
+}
+
+static int raumfeld_ddx_audio_remove(struct snd_soc_card *card)
+{
+	raumfeld_enable_audio(false);
+	platform_device_unregister(wm8782_device);
+	gpio_free(GPIO_CODEC_RESET);
+
+	return 0;
+}
+
 static struct snd_soc_card snd_soc_raumfeld_ddx = {
+	.probe		= raumfeld_ddx_audio_probe,
+	.remove		= raumfeld_ddx_audio_remove,
 	.name		= "Raumfeld DDX",
 	.dai_link	= snd_soc_raumfeld_ddx_dai,
 	.num_links	= ARRAY_SIZE(snd_soc_raumfeld_ddx_dai),
@@ -234,24 +261,15 @@ static struct snd_soc_card snd_soc_raumfeld_ddx = {
 	.resume_pre	= raumfeld_analog_resume,
 };
 
-static struct platform_device *raumfeld_audio_device, *wm8782_device;
-
 static int __init raumfeld_ddx_audio_init(void)
 {
 	int ret;
-
+	
 	if (!machine_is_raumfeld_speaker() &&
 	    !machine_is_raumfeld_connector())
 		return 0;
 
-	wm8782_device = platform_device_alloc("wm8782", 0);
-	if (!wm8782_device)
-		return -ENOMEM;
-
-	platform_device_add(wm8782_device);
-
-	/* Register audio device */
-	raumfeld_audio_device = platform_device_alloc("soc-audio", 0);
+	raumfeld_audio_device = platform_device_alloc("soc-audio", -1);
 	if (!raumfeld_audio_device)
 		return -ENOMEM;
 
@@ -262,17 +280,12 @@ static int __init raumfeld_ddx_audio_init(void)
 	if (ret < 0)
 		return ret;
 
-	raumfeld_enable_audio(true);
 	return 0;
 }
 
 static void __exit raumfeld_ddx_audio_exit(void)
 {
-	raumfeld_enable_audio(false);
-
-	platform_device_unregister(wm8782_device);
 	platform_device_unregister(raumfeld_audio_device);
-	gpio_free(GPIO_CODEC_RESET);
 }
 
 module_init(raumfeld_ddx_audio_init);
