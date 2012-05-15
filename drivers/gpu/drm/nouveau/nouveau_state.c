@@ -642,7 +642,7 @@ nouveau_card_channel_init(struct drm_device *dev)
 		OUT_RING  (chan, chan->vram_handle);
 		OUT_RING  (chan, chan->gart_handle);
 	} else
-	if (dev_priv->card_type <= NV_C0) {
+	if (dev_priv->card_type <= NV_D0) {
 		ret = nouveau_gpuobj_gr_new(chan, 0x9039, 0x9039);
 		if (ret)
 			goto error;
@@ -662,6 +662,12 @@ error:
 	return ret;
 }
 
+static const struct vga_switcheroo_client_ops nouveau_switcheroo_ops = {
+	.set_gpu_state = nouveau_switcheroo_set_state,
+	.reprobe = nouveau_switcheroo_reprobe,
+	.can_switch = nouveau_switcheroo_can_switch,
+};
+
 int
 nouveau_card_init(struct drm_device *dev)
 {
@@ -670,9 +676,7 @@ nouveau_card_init(struct drm_device *dev)
 	int ret, e = 0;
 
 	vga_client_register(dev->pdev, dev, NULL, nouveau_vga_set_decode);
-	vga_switcheroo_register_client(dev->pdev, nouveau_switcheroo_set_state,
-				       nouveau_switcheroo_reprobe,
-				       nouveau_switcheroo_can_switch);
+	vga_switcheroo_register_client(dev->pdev, &nouveau_switcheroo_ops);
 
 	/* Initialise internal driver API hooks */
 	ret = nouveau_init_engine_ptrs(dev);
