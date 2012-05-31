@@ -2265,6 +2265,7 @@ static int si_gpu_soft_reset(struct radeon_device *rdev)
 		      SOFT_RESET_GDS |
 		      SOFT_RESET_PA |
 		      SOFT_RESET_SC |
+		      SOFT_RESET_BCI |
 		      SOFT_RESET_SPI |
 		      SOFT_RESET_SX |
 		      SOFT_RESET_TC |
@@ -2975,7 +2976,8 @@ int si_rlc_init(struct radeon_device *rdev)
 	/* save restore block */
 	if (rdev->rlc.save_restore_obj == NULL) {
 		r = radeon_bo_create(rdev, RADEON_GPU_PAGE_SIZE, PAGE_SIZE, true,
-				RADEON_GEM_DOMAIN_VRAM, &rdev->rlc.save_restore_obj);
+				     RADEON_GEM_DOMAIN_VRAM, NULL,
+				     &rdev->rlc.save_restore_obj);
 		if (r) {
 			dev_warn(rdev->dev, "(%d) create RLC sr bo failed\n", r);
 			return r;
@@ -2999,7 +3001,8 @@ int si_rlc_init(struct radeon_device *rdev)
 	/* clear state block */
 	if (rdev->rlc.clear_state_obj == NULL) {
 		r = radeon_bo_create(rdev, RADEON_GPU_PAGE_SIZE, PAGE_SIZE, true,
-				RADEON_GEM_DOMAIN_VRAM, &rdev->rlc.clear_state_obj);
+				     RADEON_GEM_DOMAIN_VRAM, NULL,
+				     &rdev->rlc.clear_state_obj);
 		if (r) {
 			dev_warn(rdev->dev, "(%d) create RLC c bo failed\n", r);
 			si_rlc_fini(rdev);
@@ -3986,10 +3989,6 @@ int si_init(struct radeon_device *rdev)
 	struct radeon_ring *ring = &rdev->ring[RADEON_RING_TYPE_GFX_INDEX];
 	int r;
 
-	/* This don't do much */
-	r = radeon_gem_init(rdev);
-	if (r)
-		return r;
 	/* Read BIOS */
 	if (!radeon_get_bios(rdev)) {
 		if (ASIC_IS_AVIVO(rdev))

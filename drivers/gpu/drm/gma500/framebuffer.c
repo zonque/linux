@@ -153,7 +153,7 @@ static void psbfb_vm_close(struct vm_area_struct *vma)
 {
 }
 
-static struct vm_operations_struct psbfb_vm_ops = {
+static const struct vm_operations_struct psbfb_vm_ops = {
 	.fault	= psbfb_vm_fault,
 	.open	= psbfb_vm_open,
 	.close	= psbfb_vm_close
@@ -782,7 +782,7 @@ void psb_modeset_init(struct drm_device *dev)
 	dev->mode_config.min_width = 0;
 	dev->mode_config.min_height = 0;
 
-	dev->mode_config.funcs = (void *) &psb_mode_funcs;
+	dev->mode_config.funcs = &psb_mode_funcs;
 
 	/* set memory base */
 	/* Oaktrail and Poulsbo should use BAR 2*/
@@ -800,15 +800,20 @@ void psb_modeset_init(struct drm_device *dev)
 
 	if (dev_priv->ops->errata)
 	        dev_priv->ops->errata(dev);
+
+        dev_priv->modeset = true;
 }
 
 void psb_modeset_cleanup(struct drm_device *dev)
 {
-	mutex_lock(&dev->struct_mutex);
+	struct drm_psb_private *dev_priv = dev->dev_private;
+	if (dev_priv->modeset) {
+		mutex_lock(&dev->struct_mutex);
 
-	drm_kms_helper_poll_fini(dev);
-	psb_fbdev_fini(dev);
-	drm_mode_config_cleanup(dev);
+		drm_kms_helper_poll_fini(dev);
+		psb_fbdev_fini(dev);
+		drm_mode_config_cleanup(dev);
 
-	mutex_unlock(&dev->struct_mutex);
+		mutex_unlock(&dev->struct_mutex);
+	}
 }

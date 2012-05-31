@@ -1094,7 +1094,6 @@ int radeon_pm_get_type_index(struct radeon_device *rdev,
 			     int instance);
 
 struct r600_audio {
-	bool			enabled;
 	int			channels;
 	int			rate;
 	int			bits_per_sample;
@@ -1535,7 +1534,8 @@ struct radeon_device {
 	int num_crtc; /* number of crtcs */
 	struct mutex dc_hw_i2c_mutex; /* display controller hw i2c mutex */
 	struct mutex vram_mutex;
-	struct r600_audio audio; /* audio stuff */
+	bool audio_enabled;
+	struct r600_audio audio_status; /* audio stuff */
 	struct notifier_block acpi_nb;
 	/* only one userspace can use Hyperz features or CMASK at a time */
 	struct drm_file *hyperz_filp;
@@ -1827,9 +1827,31 @@ int r600_fmt_get_nblocksy(u32 format, u32 h);
 /*
  * r600 functions used by radeon_encoder.c
  */
+struct radeon_hdmi_acr {
+	u32 clock;
+
+	int n_32khz;
+	int cts_32khz;
+
+	int n_44_1khz;
+	int cts_44_1khz;
+
+	int n_48khz;
+	int cts_48khz;
+
+};
+
+extern struct radeon_hdmi_acr r600_hdmi_acr(uint32_t clock);
+
 extern void r600_hdmi_enable(struct drm_encoder *encoder);
 extern void r600_hdmi_disable(struct drm_encoder *encoder);
 extern void r600_hdmi_setmode(struct drm_encoder *encoder, struct drm_display_mode *mode);
+
+/*
+ * evergreen functions used by radeon_encoder.c
+ */
+
+extern void evergreen_hdmi_setmode(struct drm_encoder *encoder, struct drm_display_mode *mode);
 
 extern int ni_init_microcode(struct radeon_device *rdev);
 extern int ni_mc_load_microcode(struct radeon_device *rdev);
