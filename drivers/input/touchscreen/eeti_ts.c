@@ -46,9 +46,6 @@ MODULE_PARM_DESC(flip_y, "flip y coordinate");
 struct eeti_ts_priv {
 	struct i2c_client *client;
 	struct input_dev *input;
-	struct work_struct work;
-	struct mutex mutex;
-	int irq, irq_active_high;
 };
 
 #define EETI_TS_BITDEPTH	(11)
@@ -60,26 +57,18 @@ struct eeti_ts_priv {
 #define REPORT_BIT_HAS_PRESSURE	(1 << 6)
 #define REPORT_RES_BITS(v)	(((v) >> 1) + EETI_TS_BITDEPTH)
 
-static inline int eeti_ts_irq_active(struct eeti_ts_priv *priv)
+static irqreturn_t eeti_ts_isr(int irq, void *dev_id)
 {
-	return gpio_get_value(irq_to_gpio(priv->irq)) == priv->irq_active_high;
-}
-
-static void eeti_ts_read(struct work_struct *work)
-{
+	struct eeti_ts_priv *priv = dev_id;
+	struct i2c_client *client = priv->client;
+	struct input_dev *input  = priv->input;
+	unsigned int x, y, res, pressed;
+	int rc;
 	char buf[6];
-	unsigned int x, y, res, pressed, to = 100;
-	struct eeti_ts_priv *priv =
-		container_of(work, struct eeti_ts_priv, work);
 
-	mutex_lock(&priv->mutex);
-
-	while (eeti_ts_irq_active(priv) && --to)
-		i2c_master_recv(priv->client, buf, sizeof(buf));
-
-	if (!to) {
-		dev_err(&priv->client->dev,
-			"unable to clear IRQ - line stuck?\n");
+	rc = i2c_master_recv(client, buf, sizeof(buf));
+	if (rc < 0) {
+		dev_err(&client->dev, "i2c_master_recv failed, error: %d", rc);
 		goto out;
 	}
 
@@ -103,46 +92,22 @@ static void eeti_ts_read(struct work_struct *work)
 		y = EETI_MAXVAL - y;
 
 	if (buf[0] & REPORT_BIT_HAS_PRESSURE)
-		input_report_abs(priv->input, ABS_PRESSURE, buf[5]);
+		input_report_abs(input, ABS_PRESSURE, buf[5]);
 
-	input_report_abs(priv->input, ABS_X, x);
-	input_report_abs(priv->input, ABS_Y, y);
-	input_report_key(priv->input, BTN_TOUCH, !!pressed);
-	input_sync(priv->input);
+	input_report_abs(input, ABS_X, x);
+	input_report_abs(input, ABS_Y, y);
+	input_report_key(input, BTN_TOUCH, pressed);
+	input_sync(input);
 
 out:
-	mutex_unlock(&priv->mutex);
-}
-
-static irqreturn_t eeti_ts_isr(int irq, void *dev_id)
-{
-	struct eeti_ts_priv *priv = dev_id;
-
-	 /* postpone I2C transactions as we are atomic */
-	schedule_work(&priv->work);
-
 	return IRQ_HANDLED;
-}
-
-static void eeti_ts_start(struct eeti_ts_priv *priv)
-{
-	enable_irq(priv->irq);
-
-	/* Read the events once to arm the IRQ */
-	eeti_ts_read(&priv->work);
-}
-
-static void eeti_ts_stop(struct eeti_ts_priv *priv)
-{
-	disable_irq(priv->irq);
-	cancel_work_sync(&priv->work);
 }
 
 static int eeti_ts_open(struct input_dev *dev)
 {
 	struct eeti_ts_priv *priv = input_get_drvdata(dev);
 
-	eeti_ts_start(priv);
+	enable_irq(priv->client->irq);
 
 	return 0;
 }
@@ -151,17 +116,17 @@ static void eeti_ts_close(struct input_dev *dev)
 {
 	struct eeti_ts_priv *priv = input_get_drvdata(dev);
 
-	eeti_ts_stop(priv);
+	disable_irq(priv->client->irq);
 }
 
 static int __devinit eeti_ts_probe(struct i2c_client *client,
 				   const struct i2c_device_id *idp)
 {
-	struct eeti_ts_platform_data *pdata;
+	const struct eeti_ts_platform_data *pdata = client->dev.platform_data;
 	struct eeti_ts_priv *priv;
 	struct input_dev *input;
 	unsigned int irq_flags;
-	int err = -ENOMEM;
+	int err;
 
 	/*
 	 * In contrast to what's described in the datasheet, there seems
@@ -171,18 +136,21 @@ static int __devinit eeti_ts_probe(struct i2c_client *client,
 	 */
 
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-	if (!priv) {
-		dev_err(&client->dev, "failed to allocate driver data\n");
-		goto err0;
-	}
-
-	mutex_init(&priv->mutex);
 	input = input_allocate_device();
-
-	if (!input) {
-		dev_err(&client->dev, "Failed to allocate input device.\n");
-		goto err1;
+	if (!priv || !input) {
+		dev_err(&client->dev, "failed to memory\n");
+		err = -ENOMEM;
+		goto err_free_mem;
 	}
+
+	priv->client = client;
+	priv->input = input;
+
+	input->name = client->name;
+	input->id.bustype = BUS_I2C;
+	input->dev.parent = &client->dev;
+	input->open = eeti_ts_open;
+	input->close = eeti_ts_close;
 
 	input->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
 	input->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
@@ -191,55 +159,40 @@ static int __devinit eeti_ts_probe(struct i2c_client *client,
 	input_set_abs_params(input, ABS_Y, 0, EETI_MAXVAL, 0, 0);
 	input_set_abs_params(input, ABS_PRESSURE, 0, 0xff, 0, 0);
 
-	input->name = client->name;
-	input->id.bustype = BUS_I2C;
-	input->dev.parent = &client->dev;
-	input->open = eeti_ts_open;
-	input->close = eeti_ts_close;
-
-	priv->client = client;
-	priv->input = input;
-	priv->irq = client->irq;
-
-	pdata = client->dev.platform_data;
-
-	if (pdata)
-		priv->irq_active_high = pdata->irq_active_high;
-
-	irq_flags = priv->irq_active_high ?
-		IRQF_TRIGGER_RISING : IRQF_TRIGGER_FALLING;
-
-	INIT_WORK(&priv->work, eeti_ts_read);
-	i2c_set_clientdata(client, priv);
 	input_set_drvdata(input, priv);
 
-	err = input_register_device(input);
-	if (err)
-		goto err1;
+	irq_flags = pdata && pdata->irq_active_high ?
+			IRQF_TRIGGER_HIGH : IRQF_TRIGGER_LOW;
+	irq_flags |= IRQF_ONESHOT;
 
-	err = request_irq(priv->irq, eeti_ts_isr, irq_flags,
-			  client->name, priv);
-	if (err) {
+	err = request_threaded_irq(client->irq, NULL, eeti_ts_isr,
+				   irq_flags, client->name, priv);
+	if (err < 0) {
 		dev_err(&client->dev, "Unable to request touchscreen IRQ.\n");
-		goto err2;
+		goto err_free_mem;
 	}
 
 	/*
-	 * Disable the device for now. It will be enabled once the
+	 * Disable the IRQ for now. It will be enabled once the
 	 * input device is opened.
 	 */
-	eeti_ts_stop(priv);
+	disable_irq(client->irq);
 
+	err = input_register_device(input);
+	if (err)
+		goto err_free_irq;
+
+	i2c_set_clientdata(client, priv);
 	device_init_wakeup(&client->dev, 0);
+
 	return 0;
 
-err2:
-	input_unregister_device(input);
-	input = NULL; /* so we dont try to free it below */
-err1:
+err_free_irq:
+	free_irq(client->irq, priv);
+err_free_mem:
 	input_free_device(input);
 	kfree(priv);
-err0:
+
 	return err;
 }
 
@@ -247,20 +200,14 @@ static int __devexit eeti_ts_remove(struct i2c_client *client)
 {
 	struct eeti_ts_priv *priv = i2c_get_clientdata(client);
 
-	free_irq(priv->irq, priv);
-	/*
-	 * eeti_ts_stop() leaves IRQ disabled. We need to re-enable it
-	 * so that device still works if we reload the driver.
-	 */
-	enable_irq(priv->irq);
-
+	free_irq(client->irq, priv);
 	input_unregister_device(priv->input);
 	kfree(priv);
 
 	return 0;
 }
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 static int eeti_ts_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -270,12 +217,12 @@ static int eeti_ts_suspend(struct device *dev)
 	mutex_lock(&input_dev->mutex);
 
 	if (input_dev->users)
-		eeti_ts_stop(priv);
+		disable_irq(client->irq);
 
 	mutex_unlock(&input_dev->mutex);
 
 	if (device_may_wakeup(&client->dev))
-		enable_irq_wake(priv->irq);
+		enable_irq_wake(client->irq);
 
 	return 0;
 }
@@ -287,20 +234,20 @@ static int eeti_ts_resume(struct device *dev)
 	struct input_dev *input_dev = priv->input;
 
 	if (device_may_wakeup(&client->dev))
-		disable_irq_wake(priv->irq);
+		disable_irq_wake(client->irq);
 
 	mutex_lock(&input_dev->mutex);
 
 	if (input_dev->users)
-		eeti_ts_start(priv);
+		enable_irq(client->irq);
 
 	mutex_unlock(&input_dev->mutex);
 
 	return 0;
 }
+#endif
 
 static SIMPLE_DEV_PM_OPS(eeti_ts_pm, eeti_ts_suspend, eeti_ts_resume);
-#endif
 
 static const struct i2c_device_id eeti_ts_id[] = {
 	{ "eeti_ts", 0 },
@@ -311,9 +258,8 @@ MODULE_DEVICE_TABLE(i2c, eeti_ts_id);
 static struct i2c_driver eeti_ts_driver = {
 	.driver = {
 		.name = "eeti_ts",
-#ifdef CONFIG_PM
+		.owner = THIS_MODULE,
 		.pm = &eeti_ts_pm,
-#endif
 	},
 	.probe = eeti_ts_probe,
 	.remove = __devexit_p(eeti_ts_remove),
