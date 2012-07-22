@@ -1,0 +1,229 @@
+/dts-v1/;
+/include/ "pxa3xx.dtsi"
+
+/ {
+	model = "Raumfeld Connector (PXA3xx)";
+	compatible = "marvell,raumfeld-connector-pxa3xx", "marvell,pxa300";
+
+	chosen {
+		bootargs = "console=ttyS0,115200 mem=128M@a0000000";
+		linux,stdout-path = &ffuart;
+	};
+
+	memory@a0000000 {
+		reg = <0xa0000000 0x80000000>;
+	};
+
+	pxabus {
+		reg_3v3: voltage_3v3 {
+			compatible = "regulator-fixed";
+			regulator-name = "3v3-fixed-supply";
+			regulator-min-microvolt = <3300000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-always-on;
+		};
+
+		reg_1v8: voltage_1v8 {
+			compatible = "regulator-fixed";
+			regulator-name = "1v8-fixed-supply";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-always-on;
+		};
+
+		ffuart: uart@40100000 {
+			status = "okay";
+		};
+
+		pwri2c: i2c@40f500c0 {
+			status = "okay";
+
+			max8660: max8660@34 {
+				compatible = "max8660";
+				reg = <0x34>;
+			};
+		};
+
+		pxai2c1: i2c@40301680 {
+			status = "okay";
+			mrvl,i2c-fast-mode;
+
+			cs4270: cs4270@48 {
+				compatible = "cirrus,cs4270";
+				reg = <0x48>;
+				reset-gpio = <&gpio 120 0>;
+			};
+
+			eeti_ts: eeti_ts@a {
+				compatible = "eeti,touchscreen-i2c";
+				reg = <0xa>;
+				interrupt-parent = <&gpio>;
+				interrupts = <32 0>;
+			};
+		};
+
+		spi {
+			compatible = "spi-gpio";
+			#address-cells = <0x1>;
+			#size-cells = <0x1>;
+
+			gpio-sck = <&gpio 95 0>;
+			gpio-miso = <&gpio 98 0>;
+			gpio-mosi = <&gpio 97 0>;
+			cs-gpios = <&gpio 125 0>;
+			num-chipselects = <1>;
+
+			lis302@0 {
+				compatible = "st,lis302dl-spi";
+				reg = <0>;
+				spi-max-frequency = <1000000>;
+				interrupt-parent = <&gpio>;
+				interrupts = <104 0>;
+
+				st,click-single-x;
+				st,click-single-y;
+				st,click-single-z;
+				st,click-thresh-x = <10>;
+				st,click-thresh-y = <10>;
+				st,click-thresh-z = <10>;
+				st,irq1-click;
+				st,irq2-click;
+				st,wakeup-x-lo;
+				st,wakeup-x-hi;
+				st,wakeup-y-lo;
+				st,wakeup-y-hi;
+				st,wakeup-z-lo;
+				st,wakeup-z-hi;
+			};
+		};
+
+		onewire@0 {
+			compatible = "w1-gpio";
+			gpios = <&gpio 126 0>, <&gpio 105 0>;
+		};
+
+		nand0: nand@43100000 {
+			status = "okay";
+			marvell,nand-enable-arbiter;
+			marvell,nand-keep-config;
+			num-cs = <1>;
+
+			partition@0 {
+				label = "Bootloader";
+				reg = <0x0000000 0xa0000>;
+				read-only;
+			};
+
+			partition@a0000 {
+				label = "BootloaderEnvironment";
+				reg = <0x0a0000 0x20000>;
+			};
+
+			partition@c0000 {
+				label = "BootloaderSplashScreen";
+				reg = <0x0c0000 0x60000>;
+			};
+
+			partition@120000 {
+				label = "UBI";
+				reg = <0x120000 0x7ee0000>;
+			};
+		};
+		
+		usb0: ohci@4c000000 {
+			status = "okay";
+			marvell,enable-port1;
+			marvell,port-mode = <2>; /* PMM_GLOBAL_MODE */
+		};
+
+		mmc0: mmc@41100000 {
+			status = "okay";
+			mrvl,detect-delay-ms = <200>;
+			vmmc-supply = <&max8660>;
+		};
+
+		eth0: smsc@10000000 {
+			compatible = "smsc,lan9115";
+			reg = <0x10000000 0x100000>;
+			interrupt-parent = <&gpio>;
+			interrupts = <40 0x2>; /* IRQF_TRIGGER_FALLING */
+			vdd33a-supply = <&reg_3v3>;			
+			vddvario-supply = <&reg_1v8>;			
+			reg-shift = <0>;
+			reg-io-width = <4>;
+			smsc,save-mac-address;
+			smsc,irq-push-pull;
+		};
+
+		rotary@0 {
+			status = "disabled";
+			compatible = "rotary-encoder";
+			gpios = <&gpio 19 1>, <&gpio 20 0>;
+			linux,axis = <0>; /* REL_X */
+			rotary-encoder,relative-axis;
+		};
+
+		gpio-keys@0 {
+			compatible = "gpio-keys";
+
+			f1 {
+				label = "F1";
+				gpios = <&gpio 117 0>;
+				linux,code = <59>; /* KEY_F1 */
+				gpio-key,wakeup;
+			};
+
+			f2 {
+				label = "F2";
+				gpios = <&gpio 118 0>;
+				linux,code = <60>; /* KEY_F2 */
+			};
+
+			f3 {
+				label = "F3";
+				gpios = <&gpio 119 0>;
+				linux,code = <61>; /* KEY_F3 */
+			};
+
+			f4 {
+				label = "rescue boot button";
+				gpios = <&gpio 115 0>;
+				linux,code = <62>; /* KEY_F4 */
+			};
+
+			f5 {
+				label = "dock detect";
+				gpios = <&gpio 116 0>;
+				linux,code = <63>; /* KEY_F5 */
+			};
+
+			f6 {
+				label = "on_off button";
+				gpios = <&gpio 14 0>;
+				linux,code = <64>; /* KEY_F6 */
+			};
+		};
+
+		leds {
+			compatible = "gpio-leds";
+
+			led1 {
+				label = "raumfeld:1";
+				gpios = <&gpio 36 1>;
+				linux,default-trigger = "heartbeat";
+			};
+			
+			led2 {
+				label = "raumfeld:2";
+				gpios = <&gpio 35 0>;
+				linux,default-trigger = "heartbeat";
+			};
+		};
+
+		sound {
+			compatible = "";
+			audio-codec = <&cs4270>;
+		};
+	};
+};
+
