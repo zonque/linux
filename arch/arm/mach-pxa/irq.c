@@ -17,6 +17,8 @@
 #include <linux/syscore_ops.h>
 #include <linux/io.h>
 #include <linux/irq.h>
+#include <linux/of_address.h>
+#include <linux/of_irq.h>
 
 #include <asm/exception.h>
 
@@ -49,6 +51,7 @@
  */
 
 static int pxa_internal_irq_nr;
+static int pxa_irq_base;
 
 static inline int cpu_has_ipr(void)
 {
@@ -202,3 +205,74 @@ struct syscore_ops pxa_irq_syscore_ops = {
 	.suspend	= pxa_irq_suspend,
 	.resume		= pxa_irq_resume,
 };
+
+#ifdef CONFIG_OF
+static struct irq_domain *pxa_irq_domain;
+
+static int pxa_irq_map(struct irq_domain *h, unsigned int virq,
+		       irq_hw_number_t hw)
+{
+	int i = hw % 32;
+	int irq = virq - NR_IRQS_LEGACY;
+	void __iomem *base = irq_base(hw / 32);
+
+	/* initialize interrupt priority */
+	if (cpu_has_ipr())
+		__raw_writel(i | IPR_VALID, IRQ_BASE + IPR(i));
+
+	irq_set_chip_and_handler(irq, &pxa_internal_irq_chip,
+				 handle_level_irq);
+	irq_set_chip_data(irq, base);
+	set_irq_flags(irq, IRQF_VALID);
+
+	return 0;
+}
+
+static struct irq_domain_ops pxa_irq_ops = {
+	.map    = pxa_irq_map,
+	.xlate  = irq_domain_xlate_onecell,
+};
+
+static const struct of_device_id intc_ids[] __initconst = {
+	{ .compatible = "marvell,pxa-intc", },
+	{}
+};
+
+void __init pxa_dt_irq_init(int (*fn)(struct irq_data *, unsigned int))
+{
+	struct device_node *node;
+	const struct of_device_id *of_id;
+	struct pxa_intc_conf *conf;
+	int nr_irqs, ret;
+
+	node = of_find_matching_node(NULL, intc_ids);
+	if (!node) {
+		pr_err("Failed to find interrupt controller in arch-pxa\n");
+		return;
+	}
+	of_id = of_match_node(intc_ids, node);
+	conf = of_id->data;
+
+	ret = of_property_read_u32(node, "mrvl,intc-nr-irqs", &nr_irqs);
+	if (ret) {
+		pr_err("Not found mrvl,intc-nr-irqs property\n");
+		return;
+	}
+
+	pxa_irq_base = irq_alloc_descs(-1, 0, nr_irqs, 0);
+	if (pxa_irq_base < 0) {
+		pr_err("Failed to allocate IRQ numbers\n");
+		return;
+	}
+
+	pxa_irq_domain = irq_domain_add_legacy(node, nr_irqs, 0, 0,
+					       &pxa_irq_ops, NULL);
+	if (!pxa_irq_domain)
+		panic("Unable to add PXA IRQ domain\n");
+
+	irq_set_default_host(pxa_irq_domain);
+	pxa_init_irq(nr_irqs, fn);
+
+	return;
+}
+#endif /* CONFIG_OF */
