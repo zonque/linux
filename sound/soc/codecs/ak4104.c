@@ -11,10 +11,11 @@
 
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/spi/spi.h>
+#include <linux/of_device.h>
 #include <sound/core.h>
 #include <sound/soc.h>
 #include <sound/initval.h>
-#include <linux/spi/spi.h>
 #include <sound/asoundef.h>
 
 /* AK4104 registers addresses */
@@ -240,10 +241,19 @@ static int __devexit ak4104_spi_remove(struct spi_device *spi)
 	return 0;
 }
 
+#ifdef CONFIG_OF
+static const struct of_device_id ak4104_of_match[] = {
+	{ .compatible = "ak,ak4104", },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, ak4104_of_match);               
+#endif
+
 static struct spi_driver ak4104_spi_driver = {
 	.driver  = {
 		.name   = DRV_NAME,
 		.owner  = THIS_MODULE,
+		.of_match_table = of_match_ptr(ak4104_of_match),
 	},
 	.probe  = ak4104_spi_probe,
 	.remove = __devexit_p(ak4104_spi_remove),

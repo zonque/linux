@@ -1,0 +1,19 @@
+AK4104 audio CODEC
+
+This device supports SPI only.
+
+Required properties:
+
+  - compatible : "ak,ak4104"
+
+Plus the properties required by all SPI clients.
+See Documentation/devicetree/bindings/spi/spi-bus.txt for more information.
+
+
+Example:
+
+	spdif: ak4104@0 {
+		compatible = "ak,ak4104";
+		reg = <0>;
+		spi-max-frequency = <5000000>;
+	};
