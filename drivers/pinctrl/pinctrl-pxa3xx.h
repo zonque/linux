@@ -12,6 +12,7 @@
  */
 
 #ifndef __PINCTRL_PXA3XX_H
+#define __PINCTRL_PXA3XX_H
 
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinmux.h>
@@ -22,6 +23,22 @@
 
 #define PXA3xx_MAX_MUX		8
 #define MFPR_FUNC_MASK		0x7
+
+#define PXA3XX_PINCONF_PULL_UP			(1 << 0)
+#define PXA3XX_PINCONF_PULL_DOWN		(1 << 1)
+#define PXA3XX_PINCONF_DRIVE_STRENGTH		(1 << 2)
+#define PXA3XX_PINCONF_LOWPOWER_PULL_UP		(1 << 3)
+#define PXA3XX_PINCONF_LOWPOWER_PULL_DOWN	(1 << 4)
+#define PXA3XX_PINCONF_LOWPOWER_DRIVE_HIGH	(1 << 5)
+#define PXA3XX_PINCONF_LOWPOWER_DRIVE_LOW	(1 << 6)
+#define PXA3XX_PINCONF_LOWPOWER_FLOAT		(1 << 7)
+#define PXA3XX_PINCONF_LOWPOWER_ZERO		(1 << 8) /* lowpower bits: 0 */
+#define PXA3XX_PINCONF_MASK			0xffff
+#define PXA3XX_PINCONF_DS_SHIFT			16
+
+#define PXA3XX_MFPR_PULL_SEL			(1 << 15)
+#define PXA3XX_MFPR_PULL_UP			(1 << 14)
+#define PXA3XX_MFPR_PULL_DOWN			(1 << 13)
 
 enum pxa_cpu_type {
 	PINCTRL_INVALID = 0,
