@@ -1,0 +1,35 @@
+Marvell Technology Group, PXA3XX pinmux controller
+
+Required properties:
+- compatible	: "marvell,pxa910-pinmux"
+		: "marvell,pxa168-pinmux"
+		: "marvell,mmp2-pinmux"
+- reg		: Address range of the pinctrl registers
+
+PXA3xx's pinmux nodes act as a container for an abitrary number of subnodes.
+Each of these subnodes represents muxing for a pin, a group, or a list of
+pins or groups.
+
+The name of each subnode is not important; all subnodes should be enumerated
+and processed purely based on their content.
+
+Required subnode-properties:
+- marvell,pins	: An array of strings. Each string contains the name of a pin
+		  or group.
+- marvell,function	: A string containing the name of the function to mux to the
+		  pin or group.
+- marvell,drive-strength : An integer value that means the drive strength of a
+                        pin.
+- marvell,pull-up	: The property means a pin is pull up for input.
+- marvell,pull-down : The property means a pin is pull down for input.
+- marvell,lowpower-pull-up : The property means a pin is pull up for input in
+			  sleep state.
+- marvell,lowpower-pull-down : The property means a pin is pull down for input
+			    in sleep state.
+- marvell,lowpower-drive-high : The property means a pin is driving high for
+			     output in sleep state.
+- marvell,lowpower-drive-low : The property means a pin is driving low for
+			    output in sleep state.
+- marvell,lowpower-float : The property means a pin is float in sleep state.
+- marvell,lowpower-zero : The property means a pin is not configured in sleep
+			state.

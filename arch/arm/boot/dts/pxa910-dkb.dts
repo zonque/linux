@@ -24,6 +24,53 @@
 
 	soc {
 		apb@d4000000 {
+			pinmux@d401e000 {
+				pinctrl-names = "default";
+				pinctrl-0 = <&state_default>;
+
+				state_default: pinmux {
+					uart0 { /* BT UART */
+						marvell,pins = "uart0 4p";
+						marvell,function = "uart0";
+					};
+					uart1 {	/* Serial UART */
+						marvell,pins = "uart1 2p1";
+						marvell,function = "uart1";
+					};
+					uart2 { /* GPS UART */
+						marvell,pins = "uart2 2p1";
+						marvell,function = "uart2";
+					};
+					nand {
+						marvell,pins = "nand";
+						marvell,function = "nand";
+					};
+					twsi1 {
+						marvell,pins = "twsi 2p2";
+						marvell,function = "twsi";
+					};
+					mmc1 {
+						marvell,pins = "mmc1 12p";
+						marvell,function = "mmc1";
+					};
+					mmc2 {
+						marvell,pins = "mmc2 6p";
+						marvell,function = "mmc2";
+					};
+					w1 {
+						marvell,pins = "w1-4";
+						marvell,function = "w1";
+					};
+					ssp1 {
+						marvell,pins = "ssp1 4p1";
+						marvell,function = "ssp1";
+					};
+					gssp {
+						marvell,pins = "gssp";
+						marvell,function = "gssp";
+					};
+				};
+			};
 			uart1: uart@d4017000 {
 				status = "okay";
 			};

@@ -49,6 +49,11 @@
 			reg = <0xd4000000 0x00200000>;
 			ranges;
 
+			pinmux@d401e000 {
+				compatible = "marvell,pxa910-pinmux";
+				reg = <0xd401e000 0x4000>;
+			};
+
 			timer0: timer@d4014000 {
 				compatible = "mrvl,mmp-timer";
 				reg = <0xd4014000 0x100>;

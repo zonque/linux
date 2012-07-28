@@ -24,6 +24,57 @@
 
 	soc {
 		apb@d4000000 {
+			pinmux@d401e000 {
+				pinctrl-names = "default";
+				pinctrl-0 = <&state_default>;
+
+				state_default: pinmux {
+					uart1 {
+						marvell,pins = "uart1 2p4";
+						marvell,function = "uart1";
+					};
+					uart2 {
+						marvell,pins = "uart2 2p7";
+						marvell,function = "uart2";
+					};
+					uart3 {
+						marvell,pins = "uart3 2p6";
+						marvell,function = "uart3";
+					};
+					twsi2 {
+						marvell,pins = "twsi2-3";
+						marvell,function = "twsi2";
+					};
+					twsi3 {
+						marvell,pins = "twsi3-1";
+						marvell,function = "twsi3";
+					};
+					twsi4 {
+						marvell,pins = "twsi4";
+						marvell,function = "twsi4";
+					};
+					twsi5 {
+						marvell,pins = "twsi5-3";
+						marvell,function = "twsi5";
+					};
+					twsi6 {
+						marvell,pins = "twsi6-3";
+						marvell,function = "twsi6";
+					};
+					mmc1 {
+						marvell,pins = "mmc1 8p1";
+						marvell,function = "mmc1";
+					};
+					mmc2 {
+						marvell,pins = "mmc2 6p1";
+						marvell,function = "mmc2";
+					};
+					mmc3 {
+						marvell,pins = "mmc3 10p1";
+						marvell,function = "mmc3";
+					};
+				};
+			};
 			uart3: uart@d4018000 {
 				status = "okay";
 			};
