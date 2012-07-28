@@ -14,6 +14,7 @@
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/io.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include "pinctrl-pxa3xx.h"
 
@@ -696,10 +697,16 @@ static int __devexit mmp2_pinmux_remove(struct platform_device *pdev)
 	return pxa3xx_pinctrl_unregister(pdev);
 }
 
+static struct of_device_id mmp2_pinctrl_of_match[] __devinitdata = {
+	{ .compatible = "marvell,mmp2-pinmux", },
+	{ },
+};
+
 static struct platform_driver mmp2_pinmux_driver = {
 	.driver = {
 		.name	= "mmp2-pinmux",
 		.owner	= THIS_MODULE,
+		.of_match_table	= mmp2_pinctrl_of_match,
 	},
 	.probe	= mmp2_pinmux_probe,
 	.remove	= __devexit_p(mmp2_pinmux_remove),
@@ -718,5 +725,6 @@ static void __exit mmp2_pinmux_exit(void)
 module_exit(mmp2_pinmux_exit);
 
 MODULE_AUTHOR("Haojian Zhuang <haojian.zhuang@marvell.com>");
-MODULE_DESCRIPTION("PXA3xx pin control driver");
+MODULE_DESCRIPTION("MMP2 pin control driver");
 MODULE_LICENSE("GPL v2");
+MODULE_DEVICE_TABLE(of, mmp2_pinctrl_of_match);
