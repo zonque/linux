@@ -4450,8 +4450,11 @@ static void __snd_hda_power_up(struct hda_codec *codec, bool wait_power_down)
 	/* If the power down delayed work was cancelled above before starting,
 	 * then there is no need to go through power up here.
 	 */
-	if (codec->power_on)
+	if (codec->power_on) {
+		if (codec->power_transition < 0)
+			codec->power_transition = 0;
 		return;
+	}
 
 	trace_hda_power_up(codec);
 	snd_hda_update_power_acct(codec);
