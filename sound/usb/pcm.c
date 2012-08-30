@@ -249,6 +249,8 @@ static int start_endpoints(struct snd_usb_substream *subs, int can_sleep)
 					   subs->sync_endpoint->alt_idx, err);
 				return -EIO;
 			}
+
+			snd_usb_set_interface_quirk(subs->dev);
 		}
 
 		snd_printdd(KERN_DEBUG "Starting sync EP @%p\n", ep);
@@ -326,6 +328,7 @@ static int set_format(struct snd_usb_substream *subs, struct audioformat *fmt)
 		}
 		subs->interface = -1;
 		subs->altset_idx = 0;
+		snd_usb_set_interface_quirk(subs->dev);
 	}
 
 	/* set interface */
@@ -341,6 +344,7 @@ static int set_format(struct snd_usb_substream *subs, struct audioformat *fmt)
 				fmt->iface, fmt->altsetting);
 		subs->interface = fmt->iface;
 		subs->altset_idx = fmt->altset_idx;
+		snd_usb_set_interface_quirk(subs->dev);
 	}
 
 	subs->data_endpoint = snd_usb_add_endpoint(subs->stream->chip,
