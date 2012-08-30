@@ -110,7 +110,7 @@ MODULE_PARM_DESC(beep_mode, "Select HDA Beep registration mode "
 			    "(0=off, 1=on) (default=1).");
 #endif
 
-#ifdef CONFIG_SND_HDA_POWER_SAVE
+#ifdef CONFIG_PM
 static int param_set_xint(const char *val, const struct kernel_param *kp);
 static struct kernel_param_ops param_ops_xint = {
 	.set = param_set_xint,
@@ -130,7 +130,7 @@ MODULE_PARM_DESC(power_save, "Automatic power-saving timeout "
 static bool power_save_controller = 1;
 module_param(power_save_controller, bool, 0644);
 MODULE_PARM_DESC(power_save_controller, "Reset controller in power save mode.");
-#endif
+#endif /* CONFIG_PM */
 
 static int align_buffer_size = -1;
 module_param(align_buffer_size, bint, 0644);
@@ -1032,8 +1032,8 @@ static unsigned int azx_get_response(struct hda_bus *bus,
 		return azx_rirb_get_response(bus, addr);
 }
 
-#ifdef CONFIG_SND_HDA_POWER_SAVE
-static void azx_power_notify(struct hda_bus *bus, struct hda_codec *codec);
+#ifdef CONFIG_PM
+static void azx_power_notify(struct hda_bus *bus, bool power_up);
 #endif
 
 /* reset codec link */
@@ -1605,7 +1605,7 @@ static int DELAYED_INIT_MARK azx_codec_create(struct azx *chip, const char *mode
 	bus_temp.ops.get_response = azx_get_response;
 	bus_temp.ops.attach_pcm = azx_attach_pcm_stream;
 	bus_temp.ops.bus_reset = azx_bus_reset;
-#ifdef CONFIG_SND_HDA_POWER_SAVE
+#ifdef CONFIG_PM
 	bus_temp.power_save = &power_save;
 	bus_temp.ops.pm_notify = azx_power_notify;
 #endif
@@ -2404,16 +2404,13 @@ static void azx_stop_chip(struct azx *chip)
 	chip->initialized = 0;
 }
 
-#ifdef CONFIG_SND_HDA_POWER_SAVE
+#ifdef CONFIG_PM
 /* power-up/down the controller */
-static void azx_power_notify(struct hda_bus *bus, struct hda_codec *codec)
+static void azx_power_notify(struct hda_bus *bus, bool power_up)
 {
 	struct azx *chip = bus->private_data;
 
-	if (bus->power_keep_link_on || !codec->d3_stop_clk_ok)
-		return;
-
-	if (codec->power_on)
+	if (power_up)
 		pm_runtime_get_sync(&chip->pci->dev);
 	else
 		pm_runtime_put_sync(&chip->pci->dev);
@@ -2460,7 +2457,7 @@ static int param_set_xint(const char *val, const struct kernel_param *kp)
 #else
 #define azx_add_card_list(chip) /* NOP */
 #define azx_del_card_list(chip) /* NOP */
-#endif /* CONFIG_SND_HDA_POWER_SAVE */
+#endif /* CONFIG_PM */
 
 #if defined(CONFIG_PM_SLEEP) || defined(SUPPORT_VGA_SWITCHEROO)
 /*
@@ -2528,10 +2525,8 @@ static int azx_runtime_suspend(struct device *dev)
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct azx *chip = card->private_data;
 
-#ifdef CONFIG_SND_HDA_POWER_SAVE
 	if (!power_save_controller)
 		return -EAGAIN;
-#endif
 
 	azx_stop_chip(chip);
 	azx_clear_irq_pending(chip);
@@ -3235,7 +3230,7 @@ static int DELAYED_INIT_MARK azx_first_init(struct azx *chip)
 
 static void power_down_all_codecs(struct azx *chip)
 {
-#ifdef CONFIG_SND_HDA_POWER_SAVE
+#ifdef CONFIG_PM
 	/* The codecs were powered up in snd_hda_codec_new().
 	 * Now all initialization done, so turn them down if possible
 	 */
@@ -3272,15 +3267,6 @@ static void azx_firmware_cb(const struct firmware *fw, void *context)
 	pci_set_drvdata(pci, NULL);
 }
 #endif
-
-static void rpm_get_all_codecs(struct azx *chip)
-{
-	struct hda_codec *codec;
-
-	list_for_each_entry(codec, &chip->bus->codec_list, list) {
-		pm_runtime_get_noresume(&chip->pci->dev);
-	}
-}
 
 static int __devinit azx_probe(struct pci_dev *pci,
 			       const struct pci_device_id *pci_id)
@@ -3388,7 +3374,6 @@ static int DELAYED_INIT_MARK azx_probe_continue(struct azx *chip)
 		goto out_free;
 
 	chip->running = 1;
-	rpm_get_all_codecs(chip); /* all codecs are active */
 	power_down_all_codecs(chip);
 	azx_notifier_register(chip);
 	azx_add_card_list(chip);
