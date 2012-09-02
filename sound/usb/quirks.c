@@ -768,7 +768,7 @@ void snd_usb_set_interface_quirk(struct usb_device *dev)
 	 * usb_set_interface() call.
 	 */
 	if (le16_to_cpu(dev->descriptor.idVendor) == 0x23ba)
-		mdelay(100);
+		mdelay(0);
 }
 
 void snd_usb_endpoint_start_quirk(struct snd_usb_endpoint *ep)
@@ -779,7 +779,7 @@ void snd_usb_endpoint_start_quirk(struct snd_usb_endpoint *ep)
 	 */
 	if ((le16_to_cpu(ep->chip->dev->descriptor.idVendor) == 0x23ba) &&
 	    ep->type == SND_USB_ENDPOINT_TYPE_SYNC)
-		ep->skip_packets = 10;
+		ep->skip_packets = 2;
 }
 
 void snd_usb_ctl_msg_quirk(struct usb_device *dev, unsigned int pipe,
