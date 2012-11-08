@@ -1081,7 +1081,7 @@ static struct snd_kcontrol_new stac_smux_mixer = {
 
 static const char * const slave_pfxs[] = {
 	"Front", "Surround", "Center", "LFE", "Side",
-	"Headphone", "Speaker", "IEC958", "PCM",
+	"Headphone", "Speaker", "Bass Speaker", "IEC958", "PCM",
 	NULL
 };
 
@@ -2516,6 +2516,11 @@ static int stac92xx_build_pcms(struct hda_codec *codec)
 	info->stream[SNDRV_PCM_STREAM_PLAYBACK] = stac92xx_pcm_analog_playback;
 	info->stream[SNDRV_PCM_STREAM_PLAYBACK].nid =
 		spec->multiout.dac_nids[0];
+	if (spec->autocfg.line_out_type == AUTO_PIN_SPEAKER_OUT &&
+	    spec->autocfg.line_outs == 2)
+		info->stream[SNDRV_PCM_STREAM_PLAYBACK].chmap =
+			snd_pcm_2_1_chmaps;
+
 	info->stream[SNDRV_PCM_STREAM_CAPTURE] = stac92xx_pcm_analog_capture;
 	info->stream[SNDRV_PCM_STREAM_CAPTURE].nid = spec->adc_nids[0];
 	info->stream[SNDRV_PCM_STREAM_CAPTURE].substreams = spec->num_adcs;
@@ -3269,9 +3274,9 @@ static int create_multi_out_ctls(struct hda_codec *codec, int num_outs,
 				idx = i;
 				break;
 			case AUTO_PIN_SPEAKER_OUT:
-				if (num_outs <= 1) {
-					name = "Speaker";
-					idx = i;
+				if (num_outs <= 2) {
+					name = i ? "Bass Speaker" : "Speaker";
+					idx = 0;
 					break;
 				}
 				/* Fall through in case of multi speaker outs */
