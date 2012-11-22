@@ -32,6 +32,7 @@
 #include <sound/timer.h>
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
+#include <linux/firmware.h>
 
 #include <asm/io.h>
 #include <uapi/sound/emu10k1.h>
@@ -1785,6 +1786,8 @@ struct snd_emu10k1 {
 	unsigned int efx_voices_mask[2];
 	unsigned int next_free_voice;
 
+	const struct firmware *firmware;
+
 #ifdef CONFIG_PM_SLEEP
 	unsigned int *saved_ptr;
 	unsigned int *saved_gpr;
@@ -1793,6 +1796,7 @@ struct snd_emu10k1 {
 	unsigned int *saved_icode;
 	unsigned int *p16v_saved;
 	unsigned int saved_a_iocfg, saved_hcfg;
+	bool suspend;
 #endif
 
 };
