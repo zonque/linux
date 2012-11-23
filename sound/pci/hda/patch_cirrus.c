@@ -85,7 +85,7 @@ enum {
 	CS420X_GPIO_13,
 	CS420X_GPIO_23,
 	CS420X_MBP101,
-	CS420X_MBP101_COEF,
+	CS420X_MBP81,
 	CS420X_AUTO,
 	/* aliases */
 	CS420X_IMAC27_122 = CS420X_GPIO_23,
@@ -1089,9 +1089,6 @@ static void init_input(struct hda_codec *codec)
 		if (spec->mic_detect)
 			cs_automic(codec, NULL);
 
-		coef = 0x000a; /* ADC1/2 - Digital and Analog Soft Ramp */
-		cs_vendor_coef_set(codec, IDX_ADC_CFG, coef);
-
 		coef = cs_vendor_coef_get(codec, IDX_BEEP_CFG);
 		if (is_active_pin(codec, CS_DMIC2_PIN_NID))
 			coef |= 1 << 4; /* DMIC2 2 chan on, GPIO1 off */
@@ -1121,6 +1118,9 @@ static const struct hda_verb cs_coef_init_verbs[] = {
 	  | 0x1000 /* Enable DACs High Pass Filter */
 	  | 0x0400 /* Disable Coefficient Auto increment */
 	  )},
+	/* ADC1/2 - Digital and Analog Soft Ramp */
+	{0x11, AC_VERB_SET_COEF_INDEX, IDX_ADC_CFG},
+	{0x11, AC_VERB_SET_PROC_COEF, 0x000a},
 	/* Beep */
 	{0x11, AC_VERB_SET_COEF_INDEX, IDX_BEEP_CFG},
 	{0x11, AC_VERB_SET_PROC_COEF, 0x0007}, /* Enable Beep thru DAC1/2/3 */
@@ -1177,14 +1177,6 @@ static const struct hda_verb cs_errata_init_verbs[] = {
 	{} /* terminator */
 };
 
-static const struct hda_verb mbp101_init_verbs[] = {
-	{0x11, AC_VERB_SET_COEF_INDEX, 0x0002},
-	{0x11, AC_VERB_SET_PROC_COEF, 0x100a},
-	{0x11, AC_VERB_SET_COEF_INDEX, 0x0004},
-	{0x11, AC_VERB_SET_PROC_COEF, 0x000f},
-	{}
-};
-
 /* SPDIF setup */
 static void init_digital(struct hda_codec *codec)
 {
@@ -1208,6 +1200,8 @@ static int cs_init(struct hda_codec *codec)
 	snd_hda_sequence_write(codec, cs_errata_init_verbs);
 
 	snd_hda_sequence_write(codec, cs_coef_init_verbs);
+
+	snd_hda_gen_apply_verbs(codec);
 
 	if (spec->gpio_mask) {
 		snd_hda_codec_write(codec, 0x01, 0, AC_VERB_SET_GPIO_MASK,
@@ -1301,6 +1295,7 @@ static const struct hda_model_fixup cs420x_models[] = {
 	{ .id = CS420X_IMAC27_122, .name = "imac27_122" },
 	{ .id = CS420X_APPLE, .name = "apple" },
 	{ .id = CS420X_MBP101, .name = "mbp101" },
+	{ .id = CS420X_MBP81, .name = "mbp81" },
 	{}
 };
 
@@ -1313,6 +1308,7 @@ static const struct snd_pci_quirk cs420x_fixup_tbl[] = {
 	/*SND_PCI_QUIRK(0x8086, 0x7270, "IMac 27 Inch", CS420X_IMAC27),*/
 
 	/* codec SSID */
+	SND_PCI_QUIRK(0x106b, 0x1c00, "MacBookPro 8,1", CS420X_MBP81),
 	SND_PCI_QUIRK(0x106b, 0x2000, "iMac 12,2", CS420X_IMAC27_122),
 	SND_PCI_QUIRK(0x106b, 0x2800, "MacBookPro 10,1", CS420X_MBP101),
 	SND_PCI_QUIRK_VENDOR(0x106b, "Apple", CS420X_APPLE),
@@ -1423,11 +1419,16 @@ static const struct hda_fixup cs420x_fixups[] = {
 		.type = HDA_FIXUP_PINS,
 		.v.pins = mbp101_pincfgs,
 		.chained = true,
-		.chain_id = CS420X_MBP101_COEF,
+		.chain_id = CS420X_GPIO_13,
 	},
-	[CS420X_MBP101_COEF] = {
+	[CS420X_MBP81] = {
 		.type = HDA_FIXUP_VERBS,
-		.v.verbs = mbp101_init_verbs,
+		.v.verbs = (const struct hda_verb[]) {
+			/* internal mic ADC2: right only, single ended */
+			{0x11, AC_VERB_SET_COEF_INDEX, IDX_ADC_CFG},
+			{0x11, AC_VERB_SET_PROC_COEF, 0x102a},
+			{}
+		},
 		.chained = true,
 		.chain_id = CS420X_GPIO_13,
 	},
