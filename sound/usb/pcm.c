@@ -362,6 +362,19 @@ static int set_format(struct snd_usb_substream *subs, struct audioformat *fmt)
 	attr = fmt->ep_attr & USB_ENDPOINT_SYNCTYPE;
 
 	switch (subs->stream->chip->usb_id) {
+	case USB_ID(0x0763, 0x2030): /* M-Audio Fast Track C400 */
+		if (is_playback) {
+			implicit_fb = 1;
+			ep = 0x81;
+			iface = usb_ifnum_to_if(dev, 3);
+
+			if (!iface || iface->num_altsetting == 0)
+				return -EINVAL;
+
+			alts = &iface->altsetting[1];
+			goto add_sync_ep;
+		}
+		break;
 	case USB_ID(0x0763, 0x2080): /* M-Audio FastTrack Ultra */
 	case USB_ID(0x0763, 0x2081):
 		if (is_playback) {
@@ -384,7 +397,7 @@ static int set_format(struct snd_usb_substream *subs, struct audioformat *fmt)
 		/* ... and check descriptor size before accessing bSynchAddress
 		   because there is a version of the SB Audigy 2 NX firmware lacking
 		   the audio fields in the endpoint descriptors */
-		if ((get_endpoint(alts, 1)->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) != 0x01 ||
+		if ((get_endpoint(alts, 1)->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) != USB_ENDPOINT_XFER_ISOC ||
 		    (get_endpoint(alts, 1)->bLength >= USB_DT_ENDPOINT_AUDIO_SIZE &&
 		     get_endpoint(alts, 1)->bSynchAddress != 0 &&
 		     !implicit_fb)) {
