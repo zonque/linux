@@ -799,7 +799,12 @@ static int azx_corb_send_cmd(struct hda_bus *bus, u32 val)
 	spin_lock_irq(&chip->reg_lock);
 
 	/* add command to corb */
-	wp = azx_readb(chip, CORBWP);
+	wp = azx_readw(chip, CORBWP);
+	if (wp == 0xffff) {
+		/* something wrong, controller likely turned to D3 */
+		spin_unlock_irq(&chip->reg_lock);
+		return -1;
+	}
 	wp++;
 	wp %= ICH6_MAX_CORB_ENTRIES;
 
@@ -821,7 +826,12 @@ static void azx_update_rirb(struct azx *chip)
 	unsigned int addr;
 	u32 res, res_ex;
 
-	wp = azx_readb(chip, RIRBWP);
+	wp = azx_readw(chip, RIRBWP);
+	if (wp == 0xffff) {
+		/* something wrong, controller likely turned to D3 */
+		return;
+	}
+
 	if (wp == chip->rirb.wp)
 		return;
 	chip->rirb.wp = wp;
@@ -1054,7 +1064,7 @@ static void azx_power_notify(struct hda_bus *bus, bool power_up);
 /* reset codec link */
 static int azx_reset(struct azx *chip, int full_reset)
 {
-	int count;
+	unsigned long timeout;
 
 	if (!full_reset)
 		goto __skip;
@@ -1065,24 +1075,26 @@ static int azx_reset(struct azx *chip, int full_reset)
 	/* reset controller */
 	azx_writel(chip, GCTL, azx_readl(chip, GCTL) & ~ICH6_GCTL_RESET);
 
-	count = 50;
-	while (azx_readb(chip, GCTL) && --count)
-		msleep(1);
+	timeout = jiffies + msecs_to_jiffies(100);
+	while (azx_readb(chip, GCTL) &&
+			time_before(jiffies, timeout))
+		usleep_range(500, 1000);
 
 	/* delay for >= 100us for codec PLL to settle per spec
 	 * Rev 0.9 section 5.5.1
 	 */
-	msleep(1);
+	usleep_range(500, 1000);
 
 	/* Bring controller out of reset */
 	azx_writeb(chip, GCTL, azx_readb(chip, GCTL) | ICH6_GCTL_RESET);
 
-	count = 50;
-	while (!azx_readb(chip, GCTL) && --count)
-		msleep(1);
+	timeout = jiffies + msecs_to_jiffies(100);
+	while (!azx_readb(chip, GCTL) &&
+			time_before(jiffies, timeout))
+		usleep_range(500, 1000);
 
 	/* Brent Chartrand said to wait >= 540us for codecs to initialize */
-	msleep(1);
+	usleep_range(1000, 1200);
 
       __skip:
 	/* check to see if controller is ready */
@@ -2618,6 +2630,9 @@ static int azx_suspend(struct device *dev)
 	struct azx *chip = card->private_data;
 	struct azx_pcm *p;
 
+	if (chip->disabled)
+		return 0;
+
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
 	azx_clear_irq_pending(chip);
 	list_for_each_entry(p, &chip->pcm_list, list)
@@ -2642,6 +2657,9 @@ static int azx_resume(struct device *dev)
 	struct pci_dev *pci = to_pci_dev(dev);
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct azx *chip = card->private_data;
+
+	if (chip->disabled)
+		return 0;
 
 	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
