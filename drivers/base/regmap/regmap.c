@@ -34,6 +34,36 @@ static int _regmap_update_bits(struct regmap *map, unsigned int reg,
 			       unsigned int mask, unsigned int val,
 			       bool *change);
 
+bool regmap_reg_in_ranges(unsigned int reg,
+			  const struct regmap_range *ranges,
+			  unsigned int nranges)
+{
+	const struct regmap_range *r;
+	int i;
+
+	for (i = 0, r = ranges; i < nranges; i++, r++)
+		if (regmap_reg_in_range(reg, r))
+			return true;
+	return false;
+}
+EXPORT_SYMBOL_GPL(regmap_reg_in_ranges);
+
+static bool _regmap_check_range_table(struct regmap *map,
+				      unsigned int reg,
+				      const struct regmap_access_table *table)
+{
+	/* Check "no ranges" first */
+	if (regmap_reg_in_ranges(reg, table->no_ranges, table->n_no_ranges))
+		return false;
+
+	/* In case zero "yes ranges" are supplied, any reg is OK */
+	if (!table->n_yes_ranges)
+		return true;
+
+	return regmap_reg_in_ranges(reg, table->yes_ranges,
+				    table->n_yes_ranges);
+}
+
 bool regmap_writeable(struct regmap *map, unsigned int reg)
 {
 	if (map->max_register && reg > map->max_register)
@@ -41,6 +71,9 @@ bool regmap_writeable(struct regmap *map, unsigned int reg)
 
 	if (map->writeable_reg)
 		return map->writeable_reg(map->dev, reg);
+
+	if (map->wr_table)
+		return _regmap_check_range_table(map, reg, map->wr_table);
 
 	return true;
 }
@@ -56,6 +89,9 @@ bool regmap_readable(struct regmap *map, unsigned int reg)
 	if (map->readable_reg)
 		return map->readable_reg(map->dev, reg);
 
+	if (map->rd_table)
+		return _regmap_check_range_table(map, reg, map->rd_table);
+
 	return true;
 }
 
@@ -66,6 +102,9 @@ bool regmap_volatile(struct regmap *map, unsigned int reg)
 
 	if (map->volatile_reg)
 		return map->volatile_reg(map->dev, reg);
+
+	if (map->volatile_table)
+		return _regmap_check_range_table(map, reg, map->volatile_table);
 
 	return true;
 }
@@ -78,11 +117,14 @@ bool regmap_precious(struct regmap *map, unsigned int reg)
 	if (map->precious_reg)
 		return map->precious_reg(map->dev, reg);
 
+	if (map->precious_table)
+		return _regmap_check_range_table(map, reg, map->precious_table);
+
 	return false;
 }
 
 static bool regmap_volatile_range(struct regmap *map, unsigned int reg,
-	unsigned int num)
+	size_t num)
 {
 	unsigned int i;
 
@@ -214,23 +256,27 @@ static unsigned int regmap_parse_32_native(void *buf)
 	return *(u32 *)buf;
 }
 
-static void regmap_lock_mutex(struct regmap *map)
+static void regmap_lock_mutex(void *__map)
 {
+	struct regmap *map = __map;
 	mutex_lock(&map->mutex);
 }
 
-static void regmap_unlock_mutex(struct regmap *map)
+static void regmap_unlock_mutex(void *__map)
 {
+	struct regmap *map = __map;
 	mutex_unlock(&map->mutex);
 }
 
-static void regmap_lock_spinlock(struct regmap *map)
+static void regmap_lock_spinlock(void *__map)
 {
+	struct regmap *map = __map;
 	spin_lock(&map->spinlock);
 }
 
-static void regmap_unlock_spinlock(struct regmap *map)
+static void regmap_unlock_spinlock(void *__map)
 {
+	struct regmap *map = __map;
 	spin_unlock(&map->spinlock);
 }
 
@@ -335,14 +381,21 @@ struct regmap *regmap_init(struct device *dev,
 		goto err;
 	}
 
-	if (bus->fast_io) {
-		spin_lock_init(&map->spinlock);
-		map->lock = regmap_lock_spinlock;
-		map->unlock = regmap_unlock_spinlock;
+	if (config->lock && config->unlock) {
+		map->lock = config->lock;
+		map->unlock = config->unlock;
+		map->lock_arg = config->lock_arg;
 	} else {
-		mutex_init(&map->mutex);
-		map->lock = regmap_lock_mutex;
-		map->unlock = regmap_unlock_mutex;
+		if (bus->fast_io) {
+			spin_lock_init(&map->spinlock);
+			map->lock = regmap_lock_spinlock;
+			map->unlock = regmap_unlock_spinlock;
+		} else {
+			mutex_init(&map->mutex);
+			map->lock = regmap_lock_mutex;
+			map->unlock = regmap_unlock_mutex;
+		}
+		map->lock_arg = map;
 	}
 	map->format.reg_bytes = DIV_ROUND_UP(config->reg_bits, 8);
 	map->format.pad_bytes = config->pad_bits / 8;
@@ -359,6 +412,10 @@ struct regmap *regmap_init(struct device *dev,
 	map->bus = bus;
 	map->bus_context = bus_context;
 	map->max_register = config->max_register;
+	map->wr_table = config->wr_table;
+	map->rd_table = config->rd_table;
+	map->volatile_table = config->volatile_table;
+	map->precious_table = config->precious_table;
 	map->writeable_reg = config->writeable_reg;
 	map->readable_reg = config->readable_reg;
 	map->volatile_reg = config->volatile_reg;
@@ -839,7 +896,7 @@ static int _regmap_raw_write(struct regmap *map, unsigned int reg,
 					     ival);
 			if (ret) {
 				dev_err(map->dev,
-				   "Error in caching of register: %u ret: %d\n",
+					"Error in caching of register: %x ret: %d\n",
 					reg + i, ret);
 				return ret;
 			}
@@ -858,7 +915,7 @@ static int _regmap_raw_write(struct regmap *map, unsigned int reg,
 
 		/* If the write goes beyond the end of the window split it */
 		while (val_num > win_residue) {
-			dev_dbg(map->dev, "Writing window %d/%d\n",
+			dev_dbg(map->dev, "Writing window %d/%zu\n",
 				win_residue, val_len / map->format.val_bytes);
 			ret = _regmap_raw_write(map, reg, val, win_residue *
 						map->format.val_bytes);
@@ -994,11 +1051,11 @@ int regmap_write(struct regmap *map, unsigned int reg, unsigned int val)
 	if (reg % map->reg_stride)
 		return -EINVAL;
 
-	map->lock(map);
+	map->lock(map->lock_arg);
 
 	ret = _regmap_write(map, reg, val);
 
-	map->unlock(map);
+	map->unlock(map->lock_arg);
 
 	return ret;
 }
@@ -1030,11 +1087,11 @@ int regmap_raw_write(struct regmap *map, unsigned int reg,
 	if (reg % map->reg_stride)
 		return -EINVAL;
 
-	map->lock(map);
+	map->lock(map->lock_arg);
 
 	ret = _regmap_raw_write(map, reg, val, val_len);
 
-	map->unlock(map);
+	map->unlock(map->lock_arg);
 
 	return ret;
 }
@@ -1066,7 +1123,7 @@ int regmap_bulk_write(struct regmap *map, unsigned int reg, const void *val,
 	if (reg % map->reg_stride)
 		return -EINVAL;
 
-	map->lock(map);
+	map->lock(map->lock_arg);
 
 	/* No formatting is require if val_byte is 1 */
 	if (val_bytes == 1) {
@@ -1102,7 +1159,7 @@ int regmap_bulk_write(struct regmap *map, unsigned int reg, const void *val,
 		kfree(wval);
 
 out:
-	map->unlock(map);
+	map->unlock(map->lock_arg);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(regmap_bulk_write);
@@ -1197,11 +1254,11 @@ int regmap_read(struct regmap *map, unsigned int reg, unsigned int *val)
 	if (reg % map->reg_stride)
 		return -EINVAL;
 
-	map->lock(map);
+	map->lock(map->lock_arg);
 
 	ret = _regmap_read(map, reg, val);
 
-	map->unlock(map);
+	map->unlock(map->lock_arg);
 
 	return ret;
 }
@@ -1231,7 +1288,7 @@ int regmap_raw_read(struct regmap *map, unsigned int reg, void *val,
 	if (reg % map->reg_stride)
 		return -EINVAL;
 
-	map->lock(map);
+	map->lock(map->lock_arg);
 
 	if (regmap_volatile_range(map, reg, val_count) || map->cache_bypass ||
 	    map->cache_type == REGCACHE_NONE) {
@@ -1253,7 +1310,7 @@ int regmap_raw_read(struct regmap *map, unsigned int reg, void *val,
 	}
 
  out:
-	map->unlock(map);
+	map->unlock(map->lock_arg);
 
 	return ret;
 }
@@ -1360,9 +1417,9 @@ int regmap_update_bits(struct regmap *map, unsigned int reg,
 	bool change;
 	int ret;
 
-	map->lock(map);
+	map->lock(map->lock_arg);
 	ret = _regmap_update_bits(map, reg, mask, val, &change);
-	map->unlock(map);
+	map->unlock(map->lock_arg);
 
 	return ret;
 }
@@ -1386,9 +1443,9 @@ int regmap_update_bits_check(struct regmap *map, unsigned int reg,
 {
 	int ret;
 
-	map->lock(map);
+	map->lock(map->lock_arg);
 	ret = _regmap_update_bits(map, reg, mask, val, change);
-	map->unlock(map);
+	map->unlock(map->lock_arg);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(regmap_update_bits_check);
@@ -1417,7 +1474,7 @@ int regmap_register_patch(struct regmap *map, const struct reg_default *regs,
 	if (map->patch)
 		return -EBUSY;
 
-	map->lock(map);
+	map->lock(map->lock_arg);
 
 	bypass = map->cache_bypass;
 
@@ -1445,7 +1502,7 @@ int regmap_register_patch(struct regmap *map, const struct reg_default *regs,
 out:
 	map->cache_bypass = bypass;
 
-	map->unlock(map);
+	map->unlock(map->lock_arg);
 
 	return ret;
 }
