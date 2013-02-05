@@ -217,8 +217,7 @@ static void vt1708_update_hp_work(struct hda_codec *codec)
 	struct via_spec *spec = codec->spec;
 	if (spec->codec_type != VT1708 || !spec->gen.autocfg.hp_outs)
 		return;
-	if (spec->vt1708_jack_detect &&
-	    (spec->gen.active_streams || hp_detect_with_aa(codec))) {
+	if (spec->vt1708_jack_detect) {
 		if (!spec->hp_work_active) {
 			codec->jackpoll_interval = msecs_to_jiffies(100);
 			snd_hda_codec_write(codec, 0x1, 0, 0xf81, 0);
@@ -661,6 +660,18 @@ static int via_init(struct hda_codec *codec)
 	return 0;
 }
 
+static int vt1708_build_controls(struct hda_codec *codec)
+{
+	/* In order not to create "Phantom Jack" controls,
+	   temporary enable jackpoll */
+	int err;
+	int old_interval = codec->jackpoll_interval;
+	codec->jackpoll_interval = msecs_to_jiffies(100);
+	err = via_build_controls(codec);
+	codec->jackpoll_interval = old_interval;
+	return err;
+}
+
 static int vt1708_build_pcms(struct hda_codec *codec)
 {
 	struct via_spec *spec = codec->spec;
@@ -723,6 +734,7 @@ static int patch_vt1708(struct hda_codec *codec)
 	spec->init_verbs[spec->num_iverbs++] = vt1708_init_verbs;
 
 	codec->patch_ops = via_patch_ops;
+	codec->patch_ops.build_controls = vt1708_build_controls;
 	codec->patch_ops.build_pcms = vt1708_build_pcms;
 
 	/* clear jackpoll_interval again; it's set dynamically */
