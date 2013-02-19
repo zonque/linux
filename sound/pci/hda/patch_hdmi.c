@@ -75,6 +75,7 @@ struct hdmi_spec_per_pin {
 	struct hda_codec *codec;
 	struct hdmi_eld sink_eld;
 	struct delayed_work work;
+	struct snd_kcontrol *eld_ctl;
 	int repoll_count;
 	bool non_pcm;
 	bool chmap_set;		/* channel-map override by ALSA API? */
@@ -91,6 +92,7 @@ struct hdmi_spec {
 	struct hda_pcm pcm_rec[MAX_HDMI_PINS];
 	unsigned int channels_max; /* max over all cvts */
 
+	struct hdmi_eld temp_eld;
 	/*
 	 * Non-generic ATI/NVIDIA specific
 	 */
@@ -343,14 +345,18 @@ static int hdmi_eld_ctl_info(struct snd_kcontrol *kcontrol,
 			struct snd_ctl_elem_info *uinfo)
 {
 	struct hda_codec *codec = snd_kcontrol_chip(kcontrol);
-	struct hdmi_spec *spec;
+	struct hdmi_spec *spec = codec->spec;
+	struct hdmi_eld *eld;
 	int pin_idx;
 
-	spec = codec->spec;
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_BYTES;
 
 	pin_idx = kcontrol->private_value;
-	uinfo->count = spec->pins[pin_idx].sink_eld.eld_size;
+	eld = &spec->pins[pin_idx].sink_eld;
+
+	mutex_lock(&eld->lock);
+	uinfo->count = eld->eld_valid ? eld->eld_size : 0;
+	mutex_unlock(&eld->lock);
 
 	return 0;
 }
@@ -359,14 +365,26 @@ static int hdmi_eld_ctl_get(struct snd_kcontrol *kcontrol,
 			struct snd_ctl_elem_value *ucontrol)
 {
 	struct hda_codec *codec = snd_kcontrol_chip(kcontrol);
-	struct hdmi_spec *spec;
+	struct hdmi_spec *spec = codec->spec;
+	struct hdmi_eld *eld;
 	int pin_idx;
 
-	spec = codec->spec;
 	pin_idx = kcontrol->private_value;
+	eld = &spec->pins[pin_idx].sink_eld;
 
-	memcpy(ucontrol->value.bytes.data,
-		spec->pins[pin_idx].sink_eld.eld_buffer, ELD_MAX_SIZE);
+	mutex_lock(&eld->lock);
+	if (eld->eld_size > ARRAY_SIZE(ucontrol->value.bytes.data)) {
+		mutex_unlock(&eld->lock);
+		snd_BUG();
+		return -EINVAL;
+	}
+
+	memset(ucontrol->value.bytes.data, 0,
+	       ARRAY_SIZE(ucontrol->value.bytes.data));
+	if (eld->eld_valid)
+		memcpy(ucontrol->value.bytes.data, eld->eld_buffer,
+		       eld->eld_size);
+	mutex_unlock(&eld->lock);
 
 	return 0;
 }
@@ -396,6 +414,7 @@ static int hdmi_create_eld_ctl(struct hda_codec *codec, int pin_idx,
 	if (err < 0)
 		return err;
 
+	spec->pins[pin_idx].eld_ctl = kctl;
 	return 0;
 }
 
@@ -520,7 +539,7 @@ static int hdmi_channel_allocation(struct hdmi_eld *eld, int channels)
 	 * expand ELD's notions to match the ones used by Audio InfoFrame.
 	 */
 	for (i = 0; i < ARRAY_SIZE(eld_speaker_allocation_bits); i++) {
-		if (eld->spk_alloc & (1 << i))
+		if (eld->info.spk_alloc & (1 << i))
 			spk_mask |= eld_speaker_allocation_bits[i];
 	}
 
@@ -534,7 +553,7 @@ static int hdmi_channel_allocation(struct hdmi_eld *eld, int channels)
 		}
 	}
 
-	snd_print_channel_allocation(eld->spk_alloc, buf, sizeof(buf));
+	snd_print_channel_allocation(eld->info.spk_alloc, buf, sizeof(buf));
 	snd_printdd("HDMI: select CA 0x%x for %d-channel allocation: %s\n",
 		    ca, channels, buf);
 
@@ -875,7 +894,7 @@ static void hdmi_setup_audio_infoframe(struct hda_codec *codec, int pin_idx,
 		ca = 0;
 
 	memset(&ai, 0, sizeof(ai));
-	if (eld->conn_type == 0) { /* HDMI */
+	if (eld->info.conn_type == 0) { /* HDMI */
 		struct hdmi_audio_infoframe *hdmi_ai = &ai.hdmi;
 
 		hdmi_ai->type		= 0x84;
@@ -884,7 +903,7 @@ static void hdmi_setup_audio_infoframe(struct hda_codec *codec, int pin_idx,
 		hdmi_ai->CC02_CT47	= channels - 1;
 		hdmi_ai->CA		= ca;
 		hdmi_checksum_audio_infoframe(hdmi_ai);
-	} else if (eld->conn_type == 1) { /* DisplayPort */
+	} else if (eld->info.conn_type == 1) { /* DisplayPort */
 		struct dp_audio_infoframe *dp_ai = &ai.dp;
 
 		dp_ai->type		= 0x84;
@@ -1105,7 +1124,7 @@ static int hdmi_pcm_open(struct hda_pcm_stream *hinfo,
 
 	/* Restrict capabilities by ELD if this isn't disabled */
 	if (!static_hdmi_pcm && eld->eld_valid) {
-		snd_hdmi_eld_update_pcm_info(eld, hinfo);
+		snd_hdmi_eld_update_pcm_info(&eld->info, hinfo);
 		if (hinfo->channels_min > hinfo->channels_max ||
 		    !hinfo->rates || !hinfo->formats) {
 			per_cvt->assigned = 0;
@@ -1153,7 +1172,9 @@ static int hdmi_read_pin_conn(struct hda_codec *codec, int pin_idx)
 static void hdmi_present_sense(struct hdmi_spec_per_pin *per_pin, int repoll)
 {
 	struct hda_codec *codec = per_pin->codec;
-	struct hdmi_eld *eld = &per_pin->sink_eld;
+	struct hdmi_spec *spec = codec->spec;
+	struct hdmi_eld *eld = &spec->temp_eld;
+	struct hdmi_eld *pin_eld = &per_pin->sink_eld;
 	hda_nid_t pin_nid = per_pin->pin_nid;
 	/*
 	 * Always execute a GetPinSense verb here, even when called from
@@ -1164,27 +1185,64 @@ static void hdmi_present_sense(struct hdmi_spec_per_pin *per_pin, int repoll)
 	 * the unsolicited response to avoid custom WARs.
 	 */
 	int present = snd_hda_pin_sense(codec, pin_nid);
-	bool eld_valid = false;
+	bool update_eld = false;
+	bool eld_changed = false;
 
-	memset(eld, 0, offsetof(struct hdmi_eld, eld_buffer));
-
-	eld->monitor_present	= !!(present & AC_PINSENSE_PRESENCE);
-	if (eld->monitor_present)
-		eld_valid	= !!(present & AC_PINSENSE_ELDV);
+	pin_eld->monitor_present = !!(present & AC_PINSENSE_PRESENCE);
+	if (pin_eld->monitor_present)
+		eld->eld_valid  = !!(present & AC_PINSENSE_ELDV);
+	else
+		eld->eld_valid = false;
 
 	_snd_printd(SND_PR_VERBOSE,
 		"HDMI status: Codec=%d Pin=%d Presence_Detect=%d ELD_Valid=%d\n",
-		codec->addr, pin_nid, eld->monitor_present, eld_valid);
+		codec->addr, pin_nid, eld->monitor_present, eld->eld_valid);
 
-	if (eld_valid) {
-		if (!snd_hdmi_get_eld(eld, codec, pin_nid))
-			snd_hdmi_show_eld(eld);
+	if (eld->eld_valid) {
+		if (snd_hdmi_get_eld(codec, pin_nid, eld->eld_buffer,
+						     &eld->eld_size) < 0)
+			eld->eld_valid = false;
+		else {
+			memset(&eld->info, 0, sizeof(struct parsed_hdmi_eld));
+			if (snd_hdmi_parse_eld(&eld->info, eld->eld_buffer,
+						    eld->eld_size) < 0)
+				eld->eld_valid = false;
+		}
+
+		if (eld->eld_valid) {
+			snd_hdmi_show_eld(&eld->info);
+			update_eld = true;
+		}
 		else if (repoll) {
 			queue_delayed_work(codec->bus->workq,
 					   &per_pin->work,
 					   msecs_to_jiffies(300));
+			return;
 		}
 	}
+
+	mutex_lock(&pin_eld->lock);
+	if (pin_eld->eld_valid && !eld->eld_valid) {
+		update_eld = true;
+		eld_changed = true;
+	}
+	if (update_eld) {
+		pin_eld->eld_valid = eld->eld_valid;
+		eld_changed = pin_eld->eld_size != eld->eld_size ||
+			      memcmp(pin_eld->eld_buffer, eld->eld_buffer,
+				     eld->eld_size) != 0;
+		if (eld_changed)
+			memcpy(pin_eld->eld_buffer, eld->eld_buffer,
+			       eld->eld_size);
+		pin_eld->eld_size = eld->eld_size;
+		pin_eld->info = eld->info;
+	}
+	mutex_unlock(&pin_eld->lock);
+
+	if (eld_changed)
+		snd_ctl_notify(codec->bus->card,
+			       SNDRV_CTL_EVENT_MASK_VALUE | SNDRV_CTL_EVENT_MASK_INFO,
+			       &per_pin->eld_ctl->id);
 }
 
 static void hdmi_repoll_eld(struct work_struct *work)
@@ -1652,6 +1710,7 @@ static int generic_hdmi_init_per_pins(struct hda_codec *codec)
 		struct hdmi_eld *eld = &per_pin->sink_eld;
 
 		per_pin->codec = codec;
+		mutex_init(&eld->lock);
 		INIT_DELAYED_WORK(&per_pin->work, hdmi_repoll_eld);
 		snd_hda_eld_proc_new(codec, eld, pin_idx);
 	}
