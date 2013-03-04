@@ -56,6 +56,8 @@
 #define ARIZONA_DMIC_MICBIAS2 2
 #define ARIZONA_DMIC_MICBIAS3 3
 
+#define ARIZONA_MAX_MICBIAS 3
+
 #define ARIZONA_INMODE_DIFF 0
 #define ARIZONA_INMODE_SE   1
 #define ARIZONA_INMODE_DMIC 2
@@ -70,6 +72,13 @@
 #define ARIZONA_MAX_PDM_SPK 2
 
 struct regulator_init_data;
+
+struct arizona_micbias {
+	int mV;                    /** Regulated voltage */
+	unsigned int ext_cap:1;    /** External capacitor fitted */
+	unsigned int discharge:1;  /** Actively discharge */
+	unsigned int fast_start:1; /** Enable aggressive startup ramp rate */
+};
 
 struct arizona_micd_config {
 	unsigned int src;
@@ -105,8 +114,29 @@ struct arizona_pdata {
 	 */
 	int max_channels_clocked[ARIZONA_MAX_AIF];
 
+	/** GPIO5 is used for jack detection */
+	bool jd_gpio5;
+
+	/** Use the headphone detect circuit to identify the accessory */
+	bool hpdet_acc_id;
+
+	/** GPIO used for mic isolation with HPDET */
+	int hpdet_id_gpio;
+
 	/** GPIO for mic detection polarity */
 	int micd_pol_gpio;
+
+	/** Mic detect ramp rate */
+	int micd_bias_start_time;
+
+	/** Mic detect sample rate */
+	int micd_rate;
+
+	/** Mic detect debounce level */
+	int micd_dbtime;
+
+	/** Force MICBIAS on for mic detect */
+	bool micd_force_micbias;
 
 	/** Headset polarity configurations */
 	struct arizona_micd_config *micd_configs;
@@ -114,6 +144,9 @@ struct arizona_pdata {
 
 	/** Reference voltage for DMIC inputs */
 	int dmic_ref[ARIZONA_MAX_INPUT];
+
+	/** MICBIAS configurations */
+	struct arizona_micbias micbias[ARIZONA_MAX_MICBIAS];
 
 	/** Mode of input structures */
 	int inmode[ARIZONA_MAX_INPUT];
