@@ -89,7 +89,7 @@ static int resize_info_buffer(struct snd_info_buffer *buffer,
 	char *nbuf;
 
 	nsize = PAGE_ALIGN(nsize);
-	nbuf = krealloc(buffer->buffer, nsize, GFP_KERNEL);
+	nbuf = krealloc(buffer->buffer, nsize, GFP_KERNEL | __GFP_ZERO);
 	if (! nbuf)
 		return -ENOMEM;
 
@@ -353,7 +353,7 @@ static int snd_info_entry_open(struct inode *inode, struct file *file)
 				goto __nomem;
 			data->rbuffer = buffer;
 			buffer->len = PAGE_SIZE;
-			buffer->buffer = kmalloc(buffer->len, GFP_KERNEL);
+			buffer->buffer = kzalloc(buffer->len, GFP_KERNEL);
 			if (buffer->buffer == NULL)
 				goto __nomem;
 		}
@@ -700,25 +700,20 @@ int snd_info_get_line(struct snd_info_buffer *buffer, char *line, int len)
 {
 	int c = -1;
 
+	if (snd_BUG_ON(!buffer || !buffer->buffer))
+		return 1;
 	if (len <= 0 || buffer->stop || buffer->error)
 		return 1;
-	while (--len > 0) {
-		c = buffer->buffer[buffer->curr++];
-		if (c == '\n') {
-			if (buffer->curr >= buffer->size)
-				buffer->stop = 1;
-			break;
-		}
-		*line++ = c;
-		if (buffer->curr >= buffer->size) {
-			buffer->stop = 1;
-			break;
-		}
-	}
-	while (c != '\n' && !buffer->stop) {
+	while (!buffer->stop) {
 		c = buffer->buffer[buffer->curr++];
 		if (buffer->curr >= buffer->size)
 			buffer->stop = 1;
+		if (c == '\n')
+			break;
+		if (len) {
+			len--;
+			*line++ = c;
+		}
 	}
 	*line = '\0';
 	return 0;
