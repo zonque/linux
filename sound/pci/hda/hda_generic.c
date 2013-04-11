@@ -2333,6 +2333,7 @@ static int create_hp_mic(struct hda_codec *codec)
 
 	cfg->inputs[cfg->num_inputs].pin = nid;
 	cfg->inputs[cfg->num_inputs].type = AUTO_PIN_MIC;
+	cfg->inputs[cfg->num_inputs].is_headphone_mic = 1;
 	cfg->num_inputs++;
 	spec->hp_mic = 1;
 	spec->hp_mic_pin = nid;
@@ -4364,17 +4365,6 @@ int snd_hda_gen_build_controls(struct hda_codec *codec)
 	}
 
 	free_kctls(spec); /* no longer needed */
-
-	if (spec->hp_mic_pin) {
-		int err;
-		int nid = spec->hp_mic_pin;
-		err = snd_hda_jack_add_kctl(codec, nid, "Headphone Mic", 0);
-		if (err < 0)
-			return err;
-		err = snd_hda_jack_detect_enable(codec, nid, 0);
-		if (err < 0)
-			return err;
-	}
 
 	err = snd_hda_jack_add_kctls(codec, &spec->autocfg);
 	if (err < 0)
