@@ -409,6 +409,7 @@ snd_compr_get_caps(struct snd_compr_stream *stream, unsigned long arg)
 	if (!stream->ops->get_caps)
 		return -ENXIO;
 
+	memset(&caps, 0, sizeof(caps));
 	retval = stream->ops->get_caps(stream, &caps);
 	if (retval)
 		goto out;
@@ -427,7 +428,7 @@ snd_compr_get_codec_caps(struct snd_compr_stream *stream, unsigned long arg)
 	if (!stream->ops->get_codec_caps)
 		return -ENXIO;
 
-	caps = kmalloc(sizeof(*caps), GFP_KERNEL);
+	caps = kzalloc(sizeof(*caps), GFP_KERNEL);
 	if (!caps)
 		return -ENOMEM;
 
@@ -544,7 +545,7 @@ snd_compr_get_params(struct snd_compr_stream *stream, unsigned long arg)
 	if (!stream->ops->get_params)
 		return -EBADFD;
 
-	params = kmalloc(sizeof(*params), GFP_KERNEL);
+	params = kzalloc(sizeof(*params), GFP_KERNEL);
 	if (!params)
 		return -ENOMEM;
 	retval = stream->ops->get_params(stream, params);
