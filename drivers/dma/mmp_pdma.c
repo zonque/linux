@@ -18,6 +18,7 @@
 #include <linux/platform_data/mmp_dma.h>
 #include <linux/dmapool.h>
 #include <linux/of_device.h>
+#include <linux/of_dma.h>
 #include <linux/of.h>
 #include <linux/dma/mmp-pdma.h>
 
@@ -783,6 +784,10 @@ static struct of_device_id mmp_pdma_dt_ids[] = {
 };
 MODULE_DEVICE_TABLE(of, mmp_pdma_dt_ids);
 
+static struct of_dma_filter_info mmp_pdma_info = {
+	.filter_fn = mmp_pdma_filter_fn,
+};
+
 static int mmp_pdma_probe(struct platform_device *op)
 {
 	struct mmp_pdma_device *pdev;
@@ -867,6 +872,19 @@ static int mmp_pdma_probe(struct platform_device *op)
 	if (ret) {
 		dev_err(pdev->device.dev, "unable to register\n");
 		return ret;
+	}
+
+	if (op->dev.of_node) {
+		mmp_pdma_info.dma_cap = pdev->device.cap_mask;
+
+		/* Device-tree DMA controller registration */
+		ret = of_dma_controller_register(op->dev.of_node,
+						 of_dma_simple_xlate,
+						 &mmp_pdma_info);
+		if (ret < 0) {
+			dev_err(&op->dev, "of_dma_controller_register failed\n");
+			return ret;
+		}
 	}
 
 	dev_info(pdev->device.dev, "initialized\n");
