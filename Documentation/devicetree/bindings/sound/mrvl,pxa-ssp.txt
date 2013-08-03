@@ -1,0 +1,7 @@
+Marvell PXA SSP CPU DAI bindings
+
+Required properties:
+
+	compatible	Must be "mrvl,pxa-ssp-dai"
+
+
