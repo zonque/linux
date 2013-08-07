@@ -906,7 +906,7 @@ static int pxa3xx_nand_detect_config(struct pxa3xx_nand_info *info)
  * is: 2048 + 64 = 2112 bytes, allocate a page here for both the
  * data buffer and the DMA descriptor
  */
-#define MAX_BUFF_SIZE	PAGE_SIZE
+#define MAX_BUFF_SIZE	(PAGE_SIZE*2)
 
 #ifdef ARCH_HAS_DMA
 static int pxa3xx_nand_init_buff(struct pxa3xx_nand_info *info)
