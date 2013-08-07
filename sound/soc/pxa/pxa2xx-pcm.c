@@ -29,7 +29,6 @@ static int pxa2xx_pcm_hw_params(struct snd_pcm_substream *substream,
 	struct pxa2xx_runtime_data *prtd = runtime->private_data;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_dmaengine_dai_dma_data *dma;
-	int ret;
 
 	dma = snd_soc_dai_get_dma_data(rtd->cpu_dai, substream);
 
@@ -38,24 +37,7 @@ static int pxa2xx_pcm_hw_params(struct snd_pcm_substream *substream,
 	if (!dma)
 		return 0;
 
-	/* this may get called several times by oss emulation
-	 * with different params */
-	if (prtd->params == NULL) {
-		prtd->params = dma;
-		ret = pxa_request_dma("name", DMA_PRIO_LOW,
-			      pxa2xx_pcm_dma_irq, substream);
-		if (ret < 0)
-			return ret;
-		prtd->dma_ch = ret;
-	} else if (prtd->params != dma) {
-		pxa_free_dma(prtd->dma_ch);
-		prtd->params = dma;
-		ret = pxa_request_dma("name", DMA_PRIO_LOW,
-			      pxa2xx_pcm_dma_irq, substream);
-		if (ret < 0)
-			return ret;
-		prtd->dma_ch = ret;
-	}
+	prtd->params = dma;
 
 	return __pxa2xx_pcm_hw_params(substream, params);
 }
@@ -66,11 +48,7 @@ static int pxa2xx_pcm_hw_free(struct snd_pcm_substream *substream)
 
 	__pxa2xx_pcm_hw_free(substream);
 
-	if (prtd->dma_ch >= 0) {
-		pxa_free_dma(prtd->dma_ch);
-		prtd->dma_ch = -1;
-		prtd->params = NULL;
-	}
+	prtd->params = NULL;
 
 	return 0;
 }
