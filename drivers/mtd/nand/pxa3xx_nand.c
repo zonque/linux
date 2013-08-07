@@ -197,6 +197,7 @@ struct pxa3xx_nand_info {
 	uint32_t		ndcb0;
 	uint32_t		ndcb1;
 	uint32_t		ndcb2;
+	uint32_t		ndcb3;
 };
 
 static bool use_dma = 1;
@@ -496,6 +497,10 @@ static irqreturn_t pxa3xx_nand_irq(int irq, void *devid)
 		nand_writel(info, NDCB0, info->ndcb0);
 		nand_writel(info, NDCB0, info->ndcb1);
 		nand_writel(info, NDCB0, info->ndcb2);
+
+		/* NDCB3 register is available in NFCv2 (Armada 370/XP SoC) */
+		if (info->variant == PXA3XX_NAND_VARIANT_ARMADA370)
+			nand_writel(info, NDCB0, info->ndcb3);
 	}
 
 	/* clear NDSR to let the controller exit the IRQ */
@@ -554,6 +559,7 @@ static int prepare_command_pool(struct pxa3xx_nand_info *info, int command,
 	default:
 		info->ndcb1 = 0;
 		info->ndcb2 = 0;
+		info->ndcb3 = 0;
 		break;
 	}
 
