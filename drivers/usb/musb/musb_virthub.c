@@ -155,7 +155,7 @@ static void musb_port_suspend(struct musb *musb, bool do_suspend)
 	}
 }
 
-static void musb_port_reset(struct musb *musb, bool do_reset)
+void musb_port_reset(struct musb *musb)
 {
 	u8		power;
 	void __iomem	*mbase = musb->mregs;
@@ -173,7 +173,7 @@ static void musb_port_reset(struct musb *musb, bool do_reset)
 	 * the appropriate amount of time has passed
 	 */
 	power = musb_readb(mbase, MUSB_POWER);
-	if (do_reset) {
+	if (musb->port_reset_state) {
 
 		/*
 		 * If RESUME is set, we must make sure it stays minimum 20 ms.
@@ -356,8 +356,10 @@ int musb_hub_control(
 
 		/* finish RESET signaling? */
 		if ((musb->port1_status & USB_PORT_STAT_RESET)
-				&& time_after_eq(jiffies, musb->rh_timer))
-			musb_port_reset(musb, false);
+				&& time_after_eq(jiffies, musb->rh_timer)) {
+			musb->port_reset_state = false;
+			schedule_work(&musb->port_reset_work);
+		}
 
 		/* finish RESUME signaling? */
 		if ((musb->port1_status & MUSB_PORT_STAT_RESUME)
@@ -412,7 +414,8 @@ int musb_hub_control(
 				musb_start(musb);
 			break;
 		case USB_PORT_FEAT_RESET:
-			musb_port_reset(musb, true);
+			musb->port_reset_state = true;
+			schedule_work(&musb->port_reset_work);
 			break;
 		case USB_PORT_FEAT_SUSPEND:
 			musb_port_suspend(musb, true);

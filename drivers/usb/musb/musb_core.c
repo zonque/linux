@@ -1699,6 +1699,12 @@ static void musb_irq_work(struct work_struct *data)
 	}
 }
 
+static void musb_port_reset_work(struct work_struct *data)
+{
+	struct musb *musb = container_of(data, struct musb, port_reset_work);
+	musb_port_reset(musb);
+}
+
 /* --------------------------------------------------------------------------
  * Init support
  */
@@ -1857,6 +1863,7 @@ musb_init_controller(struct device *dev, int nIrq, void __iomem *ctrl)
 
 	/* Init IRQ workqueue before request_irq */
 	INIT_WORK(&musb->irq_work, musb_irq_work);
+	INIT_WORK(&musb->port_reset_work, musb_port_reset_work);
 
 	/* attach to the IRQ */
 	if (request_irq(nIrq, musb->isr, 0, dev_name(dev), musb)) {
