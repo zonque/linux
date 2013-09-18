@@ -90,7 +90,7 @@ static void musb_start(struct musb *musb)
 	musb_writeb(regs, MUSB_DEVCTL, devctl);
 }
 
-static void musb_port_suspend(struct musb *musb, bool do_suspend)
+void musb_port_suspend(struct musb *musb, bool do_suspend)
 {
 	struct usb_otg	*otg = musb->xceiv->otg;
 	u8		power;
