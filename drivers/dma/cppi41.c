@@ -586,6 +586,9 @@ static int cppi41_tear_down_chan(struct cppi41_channel *c)
 			}
 			c->td_seen = 1;
 		}
+
+		if (c->td_retry)
+			return -EAGAIN;
 	}
 	if (!c->td_desc_seen) {
 		desc_phys = cppi41_pop_desc(cdd, c->q_comp_num);
@@ -606,8 +609,6 @@ static int cppi41_tear_down_chan(struct cppi41_channel *c)
 	 * descriptor before the TD we fetch it from enqueue, it has to be
 	 * there waiting for us.
 	 */
-	if (!c->td_seen && c->td_retry)
-		return -EAGAIN;
 
 	WARN_ON(!c->td_retry);
 	if (!c->td_desc_seen) {
