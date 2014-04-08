@@ -19,6 +19,8 @@
 
 #define AT803X_INTR_ENABLE			0x12
 #define AT803X_INTR_STATUS			0x13
+#define AT803X_SMART_SPEED			0x14
+#define AT803X_LED_CONTROL			0x18
 #define AT803X_WOL_ENABLE			0x01
 #define AT803X_DEVICE_ADDR			0x03
 #define AT803X_LOC_MAC_ADDR_0_15_OFFSET		0x804C
@@ -35,6 +37,45 @@
 MODULE_DESCRIPTION("Atheros 803x PHY driver");
 MODULE_AUTHOR("Matus Ujhelyi");
 MODULE_LICENSE("GPL");
+
+struct at803x_priv {
+	int prev_state;
+
+	struct {
+		u16 bmcr;
+		u16 advertise;
+		u16 control1000;
+		u16 int_enable;
+		u16 smart_speed;
+		u16 led_control;
+	} context;
+};
+
+/* save relevant PHY registers to private copy */
+static void at803x_context_save(struct phy_device *phydev)
+{
+	struct at803x_priv *priv = phydev->priv;
+
+	priv->context.bmcr = phy_read(phydev, MII_BMCR);
+	priv->context.advertise = phy_read(phydev, MII_ADVERTISE);
+	priv->context.control1000 = phy_read(phydev, MII_CTRL1000);
+	priv->context.int_enable = phy_read(phydev, AT803X_INTR_ENABLE);
+	priv->context.smart_speed = phy_read(phydev, AT803X_SMART_SPEED);
+	priv->context.led_control = phy_read(phydev, AT803X_LED_CONTROL);
+}
+
+/* restore relevant PHY registers from private copy */
+static void at803x_context_restore(struct phy_device *phydev)
+{
+	struct at803x_priv *priv = phydev->priv;
+
+	phy_write(phydev, MII_BMCR, priv->context.bmcr);
+	phy_write(phydev, MII_ADVERTISE, priv->context.advertise);
+	phy_write(phydev, MII_CTRL1000, priv->context.control1000);
+	phy_write(phydev, AT803X_INTR_ENABLE, priv->context.int_enable);
+	phy_write(phydev, AT803X_SMART_SPEED, priv->context.smart_speed);
+	phy_write(phydev, AT803X_LED_CONTROL, priv->context.led_control);
+}
 
 static int at803x_set_wol(struct phy_device *phydev,
 			  struct ethtool_wolinfo *wol)
@@ -161,12 +202,54 @@ static int at803x_config_init(struct phy_device *phydev)
 	return 0;
 }
 
+static void at803x_adjust_state(struct phy_device *phydev)
+{
+	struct at803x_priv *priv = phydev->priv;
+
+	/*
+	 * When the Ethernet cable is quickly plugged and unplugged again,
+	 * the AT803x PHYs may end up in a condition where no Tx packets
+	 * will be sent. This condition is undetectable ...
+	 */
+
+	printk(" >>>>> %s() state %d -> %d\n", __func__, priv->prev_state, phydev->state);
+
+	if (priv->prev_state == PHY_NOLINK &&
+	    phydev->state == PHY_CHANGELINK) {
+		int ret;
+
+		/* store current values */
+		at803x_context_save(phydev);
+
+		/* do a soft reset */
+		ret = phy_init_hw(phydev);
+		if (WARN_ON(ret < 0))
+			return;
+
+		/* restore previous values */
+		at803x_context_restore(phydev);
+	}
+
+	priv->prev_state = phydev->state;
+}
+
+static int at803x_probe(struct phy_device *phydev)
+{
+	phydev->priv = devm_kzalloc(&phydev->dev, sizeof(*phydev->priv),
+				    GFP_KERNEL);
+	if (!phydev->priv)
+		return -ENOMEM;
+
+	return 0;
+}
+
 static struct phy_driver at803x_driver[] = {
 {
 	/* ATHEROS 8035 */
 	.phy_id		= 0x004dd072,
 	.name		= "Atheros 8035 ethernet",
 	.phy_id_mask	= 0xffffffef,
+	.probe		= at803x_probe,
 	.config_init	= at803x_config_init,
 	.set_wol	= at803x_set_wol,
 	.get_wol	= at803x_get_wol,
@@ -176,6 +259,7 @@ static struct phy_driver at803x_driver[] = {
 	.flags		= PHY_HAS_INTERRUPT,
 	.config_aneg	= genphy_config_aneg,
 	.read_status	= genphy_read_status,
+	.adjust_state	= at803x_adjust_state,
 	.driver		= {
 		.owner = THIS_MODULE,
 	},
@@ -184,6 +268,7 @@ static struct phy_driver at803x_driver[] = {
 	.phy_id		= 0x004dd076,
 	.name		= "Atheros 8030 ethernet",
 	.phy_id_mask	= 0xffffffef,
+	.probe		= at803x_probe,
 	.config_init	= at803x_config_init,
 	.set_wol	= at803x_set_wol,
 	.get_wol	= at803x_get_wol,
@@ -193,6 +278,7 @@ static struct phy_driver at803x_driver[] = {
 	.flags		= PHY_HAS_INTERRUPT,
 	.config_aneg	= genphy_config_aneg,
 	.read_status	= genphy_read_status,
+	.adjust_state	= at803x_adjust_state,
 	.driver		= {
 		.owner = THIS_MODULE,
 	},
@@ -201,6 +287,7 @@ static struct phy_driver at803x_driver[] = {
 	.phy_id		= 0x004dd074,
 	.name		= "Atheros 8031 ethernet",
 	.phy_id_mask	= 0xffffffef,
+	.probe		= at803x_probe,
 	.config_init	= at803x_config_init,
 	.set_wol	= at803x_set_wol,
 	.get_wol	= at803x_get_wol,
@@ -210,6 +297,7 @@ static struct phy_driver at803x_driver[] = {
 	.flags		= PHY_HAS_INTERRUPT,
 	.config_aneg	= genphy_config_aneg,
 	.read_status	= genphy_read_status,
+	.adjust_state	= at803x_adjust_state,
 	.driver		= {
 		.owner = THIS_MODULE,
 	},
