@@ -136,6 +136,7 @@ struct dsps_glue {
 	const struct dsps_musb_wrapper *wrp; /* wrapper register offsets */
 	struct timer_list timer;	/* otg_workaround timer */
 	unsigned long last_timer;    /* last timer data for each instance */
+	bool sw_babble_enabled;
 
 	struct dsps_context context;
 	struct debugfs_regset32 regset;
@@ -469,6 +470,16 @@ static int dsps_musb_init(struct musb *musb)
 	val &= ~(1 << wrp->otg_disable);
 	dsps_writel(musb->ctrl_base, wrp->phy_utmi, val);
 
+	/*
+	 *  Check whether the dsps version has babble control enabled.
+	 * In latest silicon revision the babble control logic is enabled.
+	 * If MUSB_BABBLE_CTL returns 0x4 then we have the babble control
+	 * logic enabled.
+	 */
+	val = dsps_readb(musb->mregs, MUSB_BABBLE_CTL);
+	if (val == MUSB_BABBLE_RCV_DISABLE)
+		glue->sw_babble_enabled = true;
+
 	ret = dsps_musb_dbg_init(musb, glue);
 	if (ret)
 		return ret;
@@ -591,14 +602,25 @@ static int dsps_musb_reset(struct musb *musb)
 	struct device *dev = musb->controller;
 	struct dsps_glue *glue = dev_get_drvdata(dev->parent);
 	const struct dsps_musb_wrapper *wrp = glue->wrp;
+	int session_restart = 0;
 
-	dsps_writel(musb->ctrl_base, wrp->control, (1 << wrp->reset));
-	usleep_range(100, 200);
-	usb_phy_shutdown(musb->xceiv);
-	usleep_range(100, 200);
-	usb_phy_init(musb->xceiv);
+	if (glue->sw_babble_enabled)
+		session_restart = sw_babble_control(musb);
+	/*
+	 * In case of new silicon version babble condition can be recovered
+	 * without resetting the MUSB. But for older silicon versions, MUSB
+	 * reset is needed
+	 */
+	if (session_restart || !glue->sw_babble_enabled) {
+		dsps_writel(musb->ctrl_base, wrp->control, (1 << wrp->reset));
+		usleep_range(100, 200);
+		usb_phy_shutdown(musb->xceiv);
+		usleep_range(100, 200);
+		usb_phy_init(musb->xceiv);
+		session_restart = 1;
+	}
 
-	return 0;
+	return !session_restart;
 }
 
 static struct musb_platform_ops dsps_ops = {
