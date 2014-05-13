@@ -536,6 +536,56 @@ static int dsps_musb_set_mode(struct musb *musb, u8 mode)
 	return 0;
 }
 
+static int sw_babble_control(struct musb *musb)
+{
+	int timeout = 10;
+	u8 babble_ctl, session_restart = 0;
+
+	babble_ctl = dsps_readb(musb->mregs, MUSB_BABBLE_CTL);
+	dev_dbg(musb->controller, "babble: MUSB_BABBLE_CTL value %x\n",
+		babble_ctl);
+	/*
+	 * check line monitor flag to check whether babble is
+	 * due to noise
+	 */
+	dev_dbg(musb->controller, "STUCK_J is %s\n",
+		babble_ctl & MUSB_BABBLE_STUCK_J ? "set" : "reset");
+
+	if (babble_ctl & MUSB_BABBLE_STUCK_J) {
+		/*
+		 * babble is due to noise, then set transmit idle (d7 bit)
+		 * to resume normal operation
+		 */
+		babble_ctl = musb_readb(musb->mregs, MUSB_BABBLE_CTL);
+		babble_ctl |= MUSB_BABBLE_FORCE_TXIDLE;
+		dsps_writeb(musb->mregs, MUSB_BABBLE_CTL, babble_ctl);
+
+		/* wait till line monitor flag cleared */
+		dev_dbg(musb->controller, "Set TXIDLE, wait J to clear\n");
+		do {
+			babble_ctl = dsps_readb(musb->mregs, MUSB_BABBLE_CTL);
+			udelay(1);
+		} while ((babble_ctl & MUSB_BABBLE_STUCK_J) && timeout--);
+
+		/* check whether stuck_at_j bit cleared */
+		if (babble_ctl & MUSB_BABBLE_STUCK_J) {
+			/*
+			 * real babble condition is occured
+			 * restart the controller to start the
+			 * session again
+			 */
+			dev_dbg(musb->controller, "J not cleared, misc (%x)\n",
+				babble_ctl);
+			session_restart = 1;
+		}
+
+	} else {
+		session_restart = 1;
+	}
+
+	return session_restart;
+}
+
 static int dsps_musb_reset(struct musb *musb)
 {
 	struct device *dev = musb->controller;
