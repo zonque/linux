@@ -813,7 +813,7 @@ static struct uac2_iso_endpoint_descriptor as_iso_in_desc = {
 	.bDescriptorType = USB_DT_CS_ENDPOINT,
 
 	.bDescriptorSubtype = UAC_EP_GENERAL,
-	.bmAttributes = 0,
+	.bmAttributes = UAC_EP_CS_ATTR_FILL_MAX,
 	.bmControls = 0,
 	.bLockDelayUnits = 0,
 	.wLockDelay = 0,
