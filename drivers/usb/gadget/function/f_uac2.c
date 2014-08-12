@@ -15,6 +15,7 @@
 #include <linux/usb/audio-v2.h>
 #include <linux/platform_device.h>
 #include <linux/module.h>
+#include <linux/time.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -89,6 +90,11 @@ struct snd_uac2_chip {
 
 	struct uac2_rtd_params p_prm;
 	struct uac2_rtd_params c_prm;
+
+	/* clocking state for capture */
+	unsigned int c_nsecs_per_byte;
+	struct timespec c_timestamp;
+	unsigned int c_residue;
 
 	struct snd_card *card;
 	struct snd_pcm *pcm;
@@ -186,9 +192,26 @@ agdev_iso_complete(struct usb_ep *ep, struct usb_request *req)
 	spin_lock_irqsave(&prm->lock, flags);
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		unsigned int nsecs;
+		struct timespec now;
+
+		now = current_kernel_time();
+		nsecs = (now.tv_sec - uac2->c_timestamp.tv_sec) * NSEC_PER_SEC
+		      + (now.tv_nsec - uac2->c_timestamp.tv_nsec);
+		uac2->c_residue += nsecs / uac2->c_nsecs_per_byte;
+
 		src = prm->dma_area + prm->hw_ptr;
-		req->actual = req->length;
 		dst = req->buf;
+
+		if (uac2->c_residue >= prm->max_psize) {
+			req->length = prm->max_psize;
+			uac2->c_residue -= prm->max_psize;
+		} else {
+			req->length = 0;
+		}
+
+		req->actual = req->length;
+		memcpy(&uac2->c_timestamp, &now, sizeof(now));
 	} else {
 		dst = prm->dma_area + prm->hw_ptr;
 		src = req->buf;
@@ -237,6 +260,8 @@ uac2_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 		prm->ss = substream;
+		uac2->c_timestamp = current_kernel_time();
+		uac2->c_residue = 0;
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -1054,6 +1079,7 @@ afunc_set_alt(struct usb_function *fn, unsigned intf, unsigned alt)
 	struct snd_uac2_chip *uac2 = &agdev->uac2;
 	struct usb_gadget *gadget = cdev->gadget;
 	struct device *dev = &uac2->pdev.dev;
+	struct f_uac2_opts *opts;
 	struct usb_request *req;
 	struct usb_ep *ep;
 	struct uac2_rtd_params *prm;
@@ -1074,11 +1100,17 @@ afunc_set_alt(struct usb_function *fn, unsigned intf, unsigned alt)
 		return 0;
 	}
 
+	opts = container_of(agdev->func.fi, struct f_uac2_opts, func_inst);
+
 	if (intf == agdev->as_out_intf) {
 		ep = agdev->out_ep;
 		prm = &uac2->c_prm;
 		config_ep_by_speed(gadget, fn, ep);
 		agdev->as_out_alt = alt;
+
+		uac2->c_nsecs_per_byte =
+			NSEC_PER_SEC / (opts->c_srate * opts->c_ssize *
+					num_channels(opts->c_chmask));
 	} else if (intf == agdev->as_in_intf) {
 		ep = agdev->in_ep;
 		prm = &uac2->p_prm;
@@ -1116,6 +1148,9 @@ afunc_set_alt(struct usb_function *fn, unsigned intf, unsigned alt)
 		if (usb_ep_queue(ep, prm->ureq[i].req, GFP_ATOMIC))
 			dev_err(dev, "%s:%d Error!\n", __func__, __LINE__);
 	}
+
+	uac2->c_timestamp = current_kernel_time();
+	uac2->c_residue = 0;
 
 	return 0;
 }
