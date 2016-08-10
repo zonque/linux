@@ -141,6 +141,7 @@
 #include <linux/netfilter_ingress.h>
 #include <linux/sctp.h>
 #include <linux/crash_dump.h>
+#include <linux/bpf-cgroup.h>
 
 #include "net-sysfs.h"
 
@@ -3329,6 +3330,10 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	if (unlikely(skb_shinfo(skb)->tx_flags & SKBTX_SCHED_TSTAMP))
 		__skb_tstamp_tx(skb, NULL, skb->sk, SCM_TSTAMP_SCHED);
 
+	rc = cgroup_bpf_run_filter(skb->sk, skb, BPF_CGROUP_INET_EGRESS);
+	if (rc)
+		goto free_skb_list;
+
 	/* Disable soft irqs for various locks below. Also
 	 * stops preemption for RCU.
 	 */
@@ -3416,6 +3421,7 @@ recursion_alert:
 	rcu_read_unlock_bh();
 
 	atomic_long_inc(&dev->tx_dropped);
+free_skb_list:
 	kfree_skb_list(skb);
 	return rc;
 out:
