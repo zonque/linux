@@ -78,6 +78,16 @@ int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 	if (skb_pfmemalloc(skb) && !sock_flag(sk, SOCK_MEMALLOC))
 		return -ENOMEM;
 
+#ifdef CONFIG_CGROUP_BPF
+	if (cgroup_bpf_enabled) {
+		err = cgroup_bpf_run_filter(sk, skb,
+					   BPF_ATTACH_TYPE_CGROUP_INET_INGRESS);
+
+		if (err)
+			return err;
+	}
+#endif
+
 	err = security_sock_rcv_skb(sk, skb);
 	if (err)
 		return err;
