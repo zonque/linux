@@ -52,6 +52,46 @@
 #include <net/dst.h>
 #include <net/sock_reuseport.h>
 
+static int sk_filter_cgroup_bpf(struct sock *sk, struct sk_buff *skb,
+				enum bpf_attach_type type)
+{
+	struct sock_cgroup_data *skcd = &sk->sk_cgrp_data;
+	struct cgroup *cgrp = sock_cgroup_ptr(skcd);
+	struct bpf_prog *prog;
+	int ret = 0;
+
+	if (sk->sk_family != AF_INET &&
+	    sk->sk_family != AF_INET6)
+		return 0;
+
+	rcu_read_lock();
+
+	switch (type) {
+	case BPF_ATTACH_TYPE_CGROUP_INET_EGRESS:
+		prog = rcu_dereference(cgrp->bpf_socket_egress_effective);
+		break;
+	case BPF_ATTACH_TYPE_CGROUP_INET_INGRESS:
+		prog = rcu_dereference(cgrp->bpf_socket_ingress_effective);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		ret = -EINVAL;
+		break;
+	}
+
+	if (prog) {
+		unsigned int offset = skb->data - skb_mac_header(skb);
+
+		__skb_push(skb, offset);
+		ret = bpf_prog_run_clear_cb(prog, skb) == 1 ? 0 : -EPERM;
+		__skb_pull(skb, offset);
+	}
+
+	rcu_read_unlock();
+
+	return ret;
+}
+
 /**
  *	sk_filter_trim_cap - run a packet through a socket filter
  *	@sk: sock associated with &sk_buff
@@ -77,6 +117,11 @@ int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 	 */
 	if (skb_pfmemalloc(skb) && !sock_flag(sk, SOCK_MEMALLOC))
 		return -ENOMEM;
+
+	err = sk_filter_cgroup_bpf(sk, skb,
+				   BPF_ATTACH_TYPE_CGROUP_INET_INGRESS);
+	if (err)
+		return err;
 
 	err = security_sock_rcv_skb(sk, skb);
 	if (err)
