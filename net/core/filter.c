@@ -2848,12 +2848,18 @@ static struct bpf_prog_type_list xdp_type __read_mostly = {
 	.type	= BPF_PROG_TYPE_XDP,
 };
 
+static struct bpf_prog_type_list cg_sk_type __read_mostly = {
+	.ops	= &sk_filter_ops,
+	.type	= BPF_PROG_TYPE_CGROUP_SOCKET,
+};
+
 static int __init register_sk_filter_ops(void)
 {
 	bpf_register_prog_type(&sk_filter_type);
 	bpf_register_prog_type(&sched_cls_type);
 	bpf_register_prog_type(&sched_act_type);
 	bpf_register_prog_type(&xdp_type);
+	bpf_register_prog_type(&cg_sk_type);
 
 	return 0;
 }
