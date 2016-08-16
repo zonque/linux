@@ -62,6 +62,7 @@
 #include <linux/proc_ns.h>
 #include <linux/nsproxy.h>
 #include <linux/file.h>
+#include <linux/bpf.h>
 #include <net/sock.h>
 
 /*
@@ -4853,6 +4854,17 @@ static int cgroup_clone_children_write(struct cgroup_subsys_state *css,
 	return 0;
 }
 
+static int cg_bpf_show(struct seq_file *seq, void *v)
+{
+	struct cgroup_subsys_state *css = seq_css(seq);
+
+	seq_printf(seq, "  ingress pin %p\n", css->cgroup->bpf_socket_ingress);
+	seq_printf(seq, "  egress pin  %p\n", css->cgroup->bpf_socket_egress);
+	seq_printf(seq, "  ingress eff %p\n", css->cgroup->bpf_socket_ingress_effective);
+	seq_printf(seq, "  egress eff  %p\n", css->cgroup->bpf_socket_egress_effective);
+	return 0;
+}
+
 /* cgroup core interface files for the default hierarchy */
 static struct cftype cgroup_dfl_base_files[] = {
 	{
@@ -4874,6 +4886,12 @@ static struct cftype cgroup_dfl_base_files[] = {
 		.seq_show = cgroup_subtree_control_show,
 		.write = cgroup_subtree_control_write,
 	},
+
+	{
+		.name = "cgroup.bpf",
+		.seq_show = cg_bpf_show,
+	},
+
 	{
 		.name = "cgroup.events",
 		.flags = CFTYPE_NOT_ON_ROOT,
@@ -5038,6 +5056,12 @@ static void css_release_work_fn(struct work_struct *work)
 		if (cgrp->kn)
 			RCU_INIT_POINTER(*(void __rcu __force **)&cgrp->kn->priv,
 					 NULL);
+
+		if (cgrp->bpf_socket_ingress)
+			bpf_prog_put(cgrp->bpf_socket_ingress);
+
+		if (cgrp->bpf_socket_egress)
+			bpf_prog_put(cgrp->bpf_socket_egress);
 	}
 
 	mutex_unlock(&cgroup_mutex);
@@ -5226,6 +5250,17 @@ static struct cgroup *cgroup_create(struct cgroup *parent)
 		set_bit(CGRP_CPUSET_CLONE_CHILDREN, &cgrp->flags);
 
 	cgrp->self.serial_nr = css_serial_nr_next++;
+
+	if (parent) {
+		rcu_read_lock();
+
+		rcu_assign_pointer(cgrp->bpf_socket_ingress_effective,
+			rcu_dereference(parent->bpf_socket_ingress_effective));
+		rcu_assign_pointer(cgrp->bpf_socket_egress_effective,
+			rcu_dereference(parent->bpf_socket_egress_effective));
+
+		rcu_read_unlock();
+	}
 
 	/* allocation complete, commit to creation */
 	list_add_tail_rcu(&cgrp->self.sibling, &cgroup_parent(cgrp)->self.children);
@@ -6416,6 +6451,95 @@ static __init int cgroup_namespaces_init(void)
 	return 0;
 }
 subsys_initcall(cgroup_namespaces_init);
+
+/**
+ * cgroup_bpf_update() - Update the pinned program of a cgroup, and propagate
+ *			 changes to descendants.
+ * @cgrp: The cgroup which descendants to traverse
+ * @prog: A new program to pin
+ * @type: Type of pinning operation (ingress/egress)
+ *
+ * Each cgroup has four pointers of socket related bpf programs; two for eBPF
+ * programs it owns, and two which are effective for execution.
+ *
+ * This function walks trough @cgrp and all of its descendants and applies the
+ * following rule to each of them:
+ *
+ * a) If a cgroup has pinned bpf programs for ingress or egress, make them
+ *    effective for that cgroup.
+ *
+ * b) If the pointer for an effective programs is unset, walk the tree up to
+ *    the root and make the first pinned program along the way the effective
+ *    one.
+ */
+void cgroup_bpf_update(struct cgroup *cgrp,
+		       struct bpf_prog *prog,
+		       enum bpf_attach_type type)
+{
+	struct cgroup_subsys_state *pos;
+	struct cgroup *parent = cgroup_parent(cgrp);
+	struct bpf_prog **progp, *old_prog, *effective;
+
+	mutex_lock(&cgroup_mutex);
+	rcu_read_lock();
+
+	progp = (type == BPF_ATTACH_TYPE_CGROUP_INET_INGRESS) ?
+		&cgrp->bpf_socket_ingress :
+		&cgrp->bpf_socket_egress;
+
+	old_prog = xchg(progp, prog);
+	if (old_prog)
+		bpf_prog_put(old_prog);
+
+	effective = !cgrp->bpf_socket_ingress && parent ?
+		rcu_dereference_protected(parent->bpf_socket_ingress_effective,
+					  lockdep_is_held(&cgroup_mutex)) :
+		cgrp->bpf_socket_ingress;
+	rcu_assign_pointer(cgrp->bpf_socket_ingress_effective, effective);
+
+	effective = !cgrp->bpf_socket_egress && parent ?
+		rcu_dereference_protected(parent->bpf_socket_egress_effective,
+					  lockdep_is_held(&cgroup_mutex)) :
+		cgrp->bpf_socket_egress;
+	rcu_assign_pointer(cgrp->bpf_socket_egress_effective, effective);
+
+	/* propagate effective ingress */
+	effective = rcu_dereference_protected(cgrp->bpf_socket_ingress_effective,
+					      lockdep_is_held(&cgroup_mutex));
+	css_for_each_descendant_pre(pos, &cgrp->self) {
+		struct cgroup *desc = container_of(pos, struct cgroup, self);
+
+		if (desc == cgrp)
+			continue;
+
+		/* skip the subtree if the descendant has its own ingress */
+		if (desc->bpf_socket_ingress)
+			pos = css_rightmost_descendant(pos);
+		else
+			rcu_assign_pointer(desc->bpf_socket_ingress_effective,
+					   effective);
+	}
+
+	/* propagate effective egress */
+	effective = rcu_dereference_protected(cgrp->bpf_socket_egress_effective,
+					      lockdep_is_held(&cgroup_mutex));
+	css_for_each_descendant_pre(pos, &cgrp->self) {
+		struct cgroup *desc = container_of(pos, struct cgroup, self);
+
+		if (desc == cgrp)
+			continue;
+
+		/* skip the subtree if the descendant has its own egress */
+		if (desc->bpf_socket_egress)
+			pos = css_rightmost_descendant(pos);
+		else
+			rcu_assign_pointer(desc->bpf_socket_egress_effective,
+					   effective);
+	}
+
+	rcu_read_unlock();
+	mutex_unlock(&cgroup_mutex);
+}
 
 #ifdef CONFIG_CGROUP_DEBUG
 static struct cgroup_subsys_state *

@@ -300,6 +300,12 @@ struct cgroup {
 	/* used to schedule release agent */
 	struct work_struct release_agent_work;
 
+	/* used by the networking layer */
+	struct bpf_prog *bpf_socket_ingress;
+	struct bpf_prog *bpf_socket_egress;
+	struct bpf_prog *bpf_socket_ingress_effective;
+	struct bpf_prog *bpf_socket_egress_effective;
+
 	/* ids of the ancestors at each level including self */
 	int ancestor_ids[];
 };
