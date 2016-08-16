@@ -822,6 +822,77 @@ static int bpf_obj_get(const union bpf_attr *attr)
 	return bpf_obj_get_user(u64_to_ptr(attr->pathname));
 }
 
+static int bpf_prog_attach(const union bpf_attr *attr)
+{
+	struct bpf_prog *prog;
+
+	if (!capable(CAP_NET_ADMIN))
+		return -EPERM;
+
+	/* Flags are unused for now */
+	if (attr->attach_flags != 0)
+		return -EINVAL;
+
+	switch (attr->attach_type) {
+	case BPF_ATTACH_TYPE_CGROUP_INET_INGRESS:
+	case BPF_ATTACH_TYPE_CGROUP_INET_EGRESS: {
+		struct cgroup *cgrp;
+
+		prog = bpf_prog_get_type(attr->attach_bpf_fd,
+					 BPF_PROG_TYPE_CGROUP_SOCKET_FILTER);
+		if (IS_ERR(prog))
+			return PTR_ERR(prog);
+
+		cgrp = cgroup_get_from_fd(attr->target_fd);
+		if (IS_ERR(cgrp)) {
+			bpf_prog_put(prog);
+			return PTR_ERR(cgrp);
+		}
+
+		cgroup_bpf_update(cgrp, prog, attr->attach_type);
+		cgroup_put(cgrp);
+
+		break;
+	}
+
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int bpf_prog_detach(const union bpf_attr *attr)
+{
+	int err = 0;
+
+	if (!capable(CAP_NET_ADMIN))
+		return -EPERM;
+
+	switch (attr->attach_type) {
+
+	case BPF_ATTACH_TYPE_CGROUP_INET_INGRESS:
+	case BPF_ATTACH_TYPE_CGROUP_INET_EGRESS: {
+		struct cgroup *cgrp;
+
+		cgrp = cgroup_get_from_fd(attr->target_fd);
+		if (IS_ERR(cgrp))
+			return PTR_ERR(cgrp);
+
+		cgroup_bpf_update(cgrp, NULL, attr->attach_type);
+		cgroup_put(cgrp);
+
+		break;
+	}
+
+	default:
+		err = -EINVAL;
+		break;
+	}
+
+	return err;
+}
+
 SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, size)
 {
 	union bpf_attr attr = {};
@@ -887,6 +958,12 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
 		break;
 	case BPF_OBJ_GET:
 		err = bpf_obj_get(&attr);
+		break;
+	case BPF_PROG_ATTACH:
+		err = bpf_prog_attach(&attr);
+		break;
+	case BPF_PROG_DETACH:
+		err = bpf_prog_detach(&attr);
 		break;
 	default:
 		err = -EINVAL;
