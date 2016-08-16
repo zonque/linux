@@ -22,6 +22,7 @@
 #include <linux/ns_common.h>
 #include <linux/nsproxy.h>
 #include <linux/user_namespace.h>
+#include <linux/bpf.h>
 
 #include <linux/cgroup-defs.h>
 
@@ -683,5 +684,26 @@ static inline void put_cgroup_ns(struct cgroup_namespace *ns)
 	if (ns && atomic_dec_and_test(&ns->count))
 		free_cgroup_ns(ns);
 }
+
+#ifdef CONFIG_CGROUP_BPF
+
+int cgroup_bpf_update(struct cgroup *cgrp,
+		      struct bpf_prog *prog,
+		      enum bpf_attach_type type);
+
+int __cgroup_bpf_update(struct cgroup *cgrp,
+			struct bpf_prog *prog,
+			enum bpf_attach_type type);
+
+extern struct static_key_false cgroup_bpf_enabled_key;
+#define cgroup_bpf_enabled static_branch_unlikely(&cgroup_bpf_enabled_key)
+
+struct sock;
+struct sk_buff;
+
+int cgroup_bpf_run_filter(struct sock *sk, struct sk_buff *skb,
+			  enum bpf_attach_type type);
+
+#endif /* CONFIG_CGROUP_BPF */
 
 #endif /* _LINUX_CGROUP_H */

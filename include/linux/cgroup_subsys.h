@@ -56,6 +56,10 @@ SUBSYS(hugetlb)
 SUBSYS(pids)
 #endif
 
+#if IS_ENABLED(CONFIG_CGROUP_BPF)
+SUBSYS(bpf)
+#endif
+
 /*
  * The following subsystems are not supported on the default hierarchy.
  */
