@@ -16,6 +16,7 @@
 #include <linux/net.h>
 #include <linux/slab.h>
 #include <linux/skbuff.h>
+#include <linux/random.h>
 #include <linux/poll.h>
 #include <linux/proc_fs.h>
 #include <linux/key-type.h>
@@ -293,9 +294,8 @@ EXPORT_SYMBOL(rxrpc_kernel_begin_call);
 void rxrpc_kernel_end_call(struct socket *sock, struct rxrpc_call *call)
 {
 	_enter("%d{%d}", call->debug_id, atomic_read(&call->usage));
-	rxrpc_remove_user_ID(rxrpc_sk(sock->sk), call);
-	rxrpc_purge_queue(&call->knlrecv_queue);
-	rxrpc_put_call(call);
+	rxrpc_release_call(rxrpc_sk(sock->sk), call);
+	rxrpc_put_call(call, rxrpc_call_put);
 }
 EXPORT_SYMBOL(rxrpc_kernel_end_call);
 
@@ -557,6 +557,7 @@ static int rxrpc_create(struct net *net, struct socket *sock, int protocol,
 		return -ENOMEM;
 
 	sock_init_data(sock, sk);
+	sock_set_flag(sk, SOCK_RCU_FREE);
 	sk->sk_state		= RXRPC_UNBOUND;
 	sk->sk_write_space	= rxrpc_write_space;
 	sk->sk_max_ack_backlog	= 0;
@@ -700,7 +701,13 @@ static int __init af_rxrpc_init(void)
 
 	BUILD_BUG_ON(sizeof(struct rxrpc_skb_priv) > FIELD_SIZEOF(struct sk_buff, cb));
 
-	rxrpc_epoch = get_seconds();
+	get_random_bytes(&rxrpc_epoch, sizeof(rxrpc_epoch));
+	rxrpc_epoch |= RXRPC_RANDOM_EPOCH;
+	get_random_bytes(&rxrpc_client_conn_ids.cur,
+			 sizeof(rxrpc_client_conn_ids.cur));
+	rxrpc_client_conn_ids.cur &= 0x3fffffff;
+	if (rxrpc_client_conn_ids.cur == 0)
+		rxrpc_client_conn_ids.cur = 1;
 
 	ret = -ENOMEM;
 	rxrpc_call_jar = kmem_cache_create(

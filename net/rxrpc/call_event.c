@@ -598,7 +598,8 @@ process_further:
 
 		/* secured packets must be verified and possibly decrypted */
 		if (call->conn->security->verify_packet(call, skb,
-							_abort_code) < 0)
+							sp->hdr.seq,
+							sp->hdr.cksum) < 0)
 			goto protocol_error;
 
 		rxrpc_insert_oos_packet(call, skb);
@@ -811,8 +812,9 @@ static int rxrpc_post_message(struct rxrpc_call *call, u32 mark, u32 error,
 }
 
 /*
- * handle background processing of incoming call packets and ACK / abort
- * generation
+ * Handle background processing of incoming call packets and ACK / abort
+ * generation.  A ref on the call is donated to us by whoever queued the work
+ * item.
  */
 void rxrpc_process_call(struct work_struct *work)
 {
@@ -827,6 +829,7 @@ void rxrpc_process_call(struct work_struct *work)
 	unsigned long bits;
 	__be32 data, pad;
 	size_t len;
+	bool requeue = false;
 	int loop, nbit, ioc, ret, mtu;
 	u32 serial, abort_code = RX_PROTOCOL_ERROR;
 	u8 *acks = NULL;
@@ -837,6 +840,11 @@ void rxrpc_process_call(struct work_struct *work)
 	_enter("{%d,%s,%lx} [%lu]",
 	       call->debug_id, rxrpc_call_states[call->state], call->events,
 	       (jiffies - call->creation_jif) / (HZ / 10));
+
+	if (call->state >= RXRPC_CALL_COMPLETE) {
+		rxrpc_put_call(call, rxrpc_call_put);
+		return;
+	}
 
 	if (!call->conn)
 		goto skip_msg_init;
@@ -868,7 +876,6 @@ skip_msg_init:
 	/* deal with events of a final nature */
 	if (test_bit(RXRPC_CALL_EV_RCVD_ERROR, &call->events)) {
 		enum rxrpc_skb_mark mark;
-		int error;
 
 		clear_bit(RXRPC_CALL_EV_CONN_ABORT, &call->events);
 		clear_bit(RXRPC_CALL_EV_REJECT_BUSY, &call->events);
@@ -876,10 +883,10 @@ skip_msg_init:
 
 		if (call->completion == RXRPC_CALL_NETWORK_ERROR) {
 			mark = RXRPC_SKB_MARK_NET_ERROR;
-			_debug("post net error %d", error);
+			_debug("post net error %d", call->error);
 		} else {
 			mark = RXRPC_SKB_MARK_LOCAL_ERROR;
-			_debug("post net local error %d", error);
+			_debug("post net local error %d", call->error);
 		}
 
 		if (rxrpc_post_message(call, mark, call->error, true) < 0)
@@ -976,7 +983,7 @@ skip_msg_init:
 	}
 
 	if (test_bit(RXRPC_CALL_EV_LIFE_TIMER, &call->events)) {
-		rxrpc_abort_call(call, RX_CALL_TIMEOUT, ETIME);
+		rxrpc_abort_call("EXP", call, 0, RX_CALL_TIMEOUT, ETIME);
 
 		_debug("post timeout");
 		if (rxrpc_post_message(call, RXRPC_SKB_MARK_LOCAL_ERROR,
@@ -999,7 +1006,7 @@ skip_msg_init:
 		case -EKEYEXPIRED:
 		case -EKEYREJECTED:
 		case -EPROTO:
-			rxrpc_abort_call(call, abort_code, -ret);
+			rxrpc_abort_call("PRO", call, 0, abort_code, -ret);
 			goto kill_ACKs;
 		}
 	}
@@ -1089,16 +1096,21 @@ skip_msg_init:
 		spin_lock_bh(&call->lock);
 
 		if (call->state == RXRPC_CALL_SERVER_SECURING) {
+			struct rxrpc_sock *rx;
 			_debug("securing");
-			write_lock(&call->socket->call_lock);
-			if (!test_bit(RXRPC_CALL_RELEASED, &call->flags) &&
-			    !test_bit(RXRPC_CALL_EV_RELEASE, &call->events)) {
-				_debug("not released");
-				call->state = RXRPC_CALL_SERVER_ACCEPTING;
-				list_move_tail(&call->accept_link,
-					       &call->socket->acceptq);
+			rcu_read_lock();
+			rx = rcu_dereference(call->socket);
+			if (rx) {
+				write_lock(&rx->call_lock);
+				if (!test_bit(RXRPC_CALL_RELEASED, &call->flags)) {
+					_debug("not released");
+					call->state = RXRPC_CALL_SERVER_ACCEPTING;
+					list_move_tail(&call->accept_link,
+						       &rx->acceptq);
+				}
+				write_unlock(&rx->call_lock);
 			}
-			write_unlock(&call->socket->call_lock);
+			rcu_read_unlock();
 			read_lock(&call->state_lock);
 			if (call->state < RXRPC_CALL_COMPLETE)
 				set_bit(RXRPC_CALL_EV_POST_ACCEPT, &call->events);
@@ -1138,11 +1150,6 @@ skip_msg_init:
 			if (rxrpc_drain_rx_oos_queue(call) < 0)
 				break;
 		goto maybe_reschedule;
-	}
-
-	if (test_bit(RXRPC_CALL_EV_RELEASE, &call->events)) {
-		rxrpc_release_call(call);
-		clear_bit(RXRPC_CALL_EV_RELEASE, &call->events);
 	}
 
 	/* other events may have been raised since we started checking */
@@ -1210,10 +1217,8 @@ send_message_2:
 			     &msg, iov, ioc, len);
 	if (ret < 0) {
 		_debug("sendmsg failed: %d", ret);
-		read_lock_bh(&call->state_lock);
-		if (call->state < RXRPC_CALL_DEAD)
-			rxrpc_queue_call(call);
-		read_unlock_bh(&call->state_lock);
+		if (call->state < RXRPC_CALL_COMPLETE)
+			requeue = true;
 		goto error;
 	}
 
@@ -1246,41 +1251,22 @@ send_message_2:
 
 kill_ACKs:
 	del_timer_sync(&call->ack_timer);
-	if (test_and_clear_bit(RXRPC_CALL_EV_ACK_FINAL, &call->events))
-		rxrpc_put_call(call);
 	clear_bit(RXRPC_CALL_EV_ACK, &call->events);
 
 maybe_reschedule:
 	if (call->events || !skb_queue_empty(&call->rx_queue)) {
-		read_lock_bh(&call->state_lock);
-		if (call->state < RXRPC_CALL_DEAD)
-			rxrpc_queue_call(call);
-		read_unlock_bh(&call->state_lock);
-	}
-
-	/* don't leave aborted connections on the accept queue */
-	if (call->state >= RXRPC_CALL_COMPLETE &&
-	    !list_empty(&call->accept_link)) {
-		_debug("X unlinking once-pending call %p { e=%lx f=%lx c=%x }",
-		       call, call->events, call->flags, call->conn->proto.cid);
-
-		read_lock_bh(&call->state_lock);
-		if (!test_bit(RXRPC_CALL_RELEASED, &call->flags) &&
-		    !test_and_set_bit(RXRPC_CALL_EV_RELEASE, &call->events))
-			rxrpc_queue_call(call);
-		read_unlock_bh(&call->state_lock);
+		if (call->state < RXRPC_CALL_COMPLETE)
+			requeue = true;
 	}
 
 error:
 	kfree(acks);
 
-	/* because we don't want two CPUs both processing the work item for one
-	 * call at the same time, we use a flag to note when it's busy; however
-	 * this means there's a race between clearing the flag and setting the
-	 * work pending bit and the work item being processed again */
-	if (call->events && !work_pending(&call->processor)) {
+	if ((requeue || call->events) && !work_pending(&call->processor)) {
 		_debug("jumpstart %x", call->conn->proto.cid);
-		rxrpc_queue_call(call);
+		__rxrpc_queue_call(call);
+	} else {
+		rxrpc_put_call(call, rxrpc_call_put);
 	}
 
 	_leave("");
