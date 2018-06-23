@@ -31,7 +31,7 @@ struct pda_power {
 	struct power_supply *pda_psy_ac, *pda_psy_usb;
 	struct regulator *ac_draw;
 	bool regulator_enabled;
-	int polling;
+	bool polling;
 	int new_ac_status;
 	int new_usb_status;
 	int ac_status;
@@ -229,7 +229,7 @@ static irqreturn_t usb_power_changed_tread_fn(int irq, void *context)
 
 static void polling_work_func(struct work_struct *work)
 {
-	int changed = 0;
+	bool changed = false;
 	struct pda_power *pp =
 		container_of(work, struct pda_power, polling_work.work);
 
@@ -239,12 +239,12 @@ static void polling_work_func(struct work_struct *work)
 
 	if (pp->ac_irq < 0 && pp->new_ac_status != pp->ac_status) {
 		pp->ac_status = PDA_PSY_TO_CHANGE;
-		changed = 1;
+		changed = true;
 	}
 
 	if (pp->usb_irq < 0 && pp->new_usb_status != pp->usb_status) {
 		pp->usb_status = PDA_PSY_TO_CHANGE;
-		changed = 1;
+		changed = true;
 	}
 
 	if (changed)
