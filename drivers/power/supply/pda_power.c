@@ -18,9 +18,11 @@
 #include <linux/power_supply.h>
 #include <linux/pda_power.h>
 #include <linux/regulator/consumer.h>
+#include <linux/gpio/consumer.h>
 #include <linux/timer.h>
 #include <linux/jiffies.h>
 #include <linux/usb/otg.h>
+#include <linux/of.h>
 
 struct pda_power {
 	struct device *dev;
@@ -29,6 +31,9 @@ struct pda_power {
 	struct delayed_work supply_work;
 	struct power_supply *pda_psy_ac, *pda_psy_usb;
 	struct regulator *ac_draw;
+	struct gpio_desc *gpiod_usb_online;
+	struct gpio_desc *gpiod_ac_online;
+	struct gpio_desc *gpiod_set_charge;
 	bool regulator_enabled;
 	bool polling;
 	int new_ac_status;
@@ -58,6 +63,9 @@ static bool pda_power_is_ac_online(struct pda_power *pp)
 	if (pp->pdata && pp->pdata->is_ac_online)
 		return pp->pdata->is_ac_online();
 
+	if (pp->gpiod_ac_online)
+		return !!gpiod_get_value_cansleep(pp->gpiod_ac_online);
+
 #if IS_ENABLED(CONFIG_USB_PHY)
 	if (pp->transceiver)
 		return pp->transceiver->last_event == USB_EVENT_CHARGER;
@@ -70,6 +78,9 @@ static bool pda_power_is_usb_online(struct pda_power *pp)
 {
 	if (pp->pdata && pp->pdata->is_usb_online)
 		return pp->pdata->is_usb_online();
+
+	if (pp->gpiod_usb_online)
+		return !!gpiod_get_value_cansleep(pp->gpiod_usb_online);
 
 #if IS_ENABLED(CONFIG_USB_PHY)
 	if (pp->transceiver)
@@ -145,6 +156,12 @@ static void update_charger(struct pda_power *pp)
 			dev_dbg(pp->dev, "charger off\n");
 			pp->pdata->set_charge(0);
 		}
+	} else if (pp->gpiod_set_charge) {
+		bool state =
+			pp->new_ac_status > 0 ||
+			pp->new_usb_status > 0;
+
+		gpiod_set_value_cansleep(pp->gpiod_set_charge, state);
 	} else if (pp->ac_draw) {
 		if (pp->new_ac_status > 0) {
 			regulator_set_current_limit(pp->ac_draw,
@@ -277,6 +294,68 @@ static int otg_handle_notification(struct notifier_block *nb,
 }
 #endif
 
+#ifdef CONFIG_OF
+static int pda_power_probe_dt(struct pda_power *pp,
+			      int *ac_irq, int *usb_irq)
+{
+	struct device *dev = pp->dev;
+	int ret;
+	u32 tmp;
+
+	pp->gpiod_ac_online = devm_gpiod_get_optional(dev, "ac-online", 0);
+	if (IS_ERR(pp->gpiod_ac_online)) {
+		return PTR_ERR(pp->gpiod_ac_online);
+	} else if (pp->gpiod_ac_online) {
+		ret = gpiod_to_irq(pp->gpiod_ac_online);
+		if (ret < 0) {
+			dev_err(dev, "Error getting ac-online IRQ\n");
+			return ret;
+		}
+
+		*ac_irq = ret;
+	}
+
+	pp->gpiod_usb_online = devm_gpiod_get_optional(dev, "usb-online", 0);
+	if (IS_ERR(pp->gpiod_usb_online)) {
+		return PTR_ERR(pp->gpiod_usb_online);
+	} else if (pp->gpiod_usb_online) {
+		ret = gpiod_to_irq(pp->gpiod_usb_online);
+		if (ret < 0) {
+			dev_err(dev, "Error getting usb-online IRQ\n");
+			return ret;
+		}
+
+		*usb_irq = ret;
+	}
+
+	if (!of_property_read_u32(dev->of_node, "power-change-delay-ms", &tmp))
+		pp->wait_for_status = tmp;
+
+	if (!of_property_read_u32(dev->of_node, "charger-delay-ms", &tmp))
+		pp->wait_for_charger = tmp;
+
+	if (!of_property_read_u32(dev->of_node, "polling-interval-ms", &tmp))
+		pp->polling_interval = tmp;
+
+	if (!of_property_read_u32(dev->of_node, "ac-max-microamp", &tmp))
+		pp->ac_max_uA = tmp;
+
+	return 0;
+}
+
+static const struct of_device_id pda_power_of_ids[] = {
+	{ .compatible = "pda-power-supply", },
+	{}
+};
+MODULE_DEVICE_TABLE(of, pda_power_of_ids);
+#else
+static int pda_power_probe_dt(struct pda_power *pp,
+			      int *ac_irq, int *usb_irq)
+{
+	return -ENOSYS;
+}
+#endif
+
 static int pda_power_probe(struct platform_device *pdev)
 {
 	unsigned int ac_irq_flags, usb_irq_flags;
@@ -284,6 +363,7 @@ static int pda_power_probe(struct platform_device *pdev)
 	struct pda_power_pdata *pdata;
 	struct pda_power *pp;
 	struct device *dev;
+	const char *regulator_name;
 	int ret, ac_irq, usb_irq;
 
 	dev = &pdev->dev;
@@ -297,12 +377,6 @@ static int pda_power_probe(struct platform_device *pdev)
 	pp = devm_kzalloc(dev, sizeof(*pp), GFP_KERNEL);
 	if (!pp)
 		return -ENOMEM;
-
-	pp->ac_draw = devm_regulator_get(dev, "ac_draw");
-	if (IS_ERR(pp->ac_draw)) {
-		dev_dbg(dev, "couldn't get ac_draw regulator\n");
-		pp->ac_draw = NULL;
-	}
 
 	pp->dev = dev;
 	pp->new_ac_status = -1;
@@ -329,6 +403,9 @@ static int pda_power_probe(struct platform_device *pdev)
 		if (pdata->supplied_to) {
 			psy_cfg.supplied_to = pdata->supplied_to;
 			psy_cfg.num_supplicants = pdata->num_supplicants;
+		} else {
+			psy_cfg.supplied_to = pda_power_supplied_to;
+			psy_cfg.num_supplicants = ARRAY_SIZE(pda_power_supplied_to);
 		}
 
 		if (pdata->init) {
@@ -348,17 +425,18 @@ static int pda_power_probe(struct platform_device *pdev)
 			usb_irq = res->start;
 			usb_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
 		}
+
+		regulator_name = "ac_draw";
 	} else {
-		dev_err(dev, "No platform data\n");
-		return -EINVAL;
+		ret = pda_power_probe_dt(pp, &ac_irq, &usb_irq);
+		if (ret < 0)
+			return ret;
+
+		psy_cfg.of_node = dev->of_node;
+		regulator_name = "ac";
 	}
 
 	psy_cfg.drv_data = pp;
-
-	if (!psy_cfg.supplied_to) {
-		psy_cfg.supplied_to = pda_power_supplied_to;
-		psy_cfg.num_supplicants = ARRAY_SIZE(pda_power_supplied_to);
-	}
 
 	platform_set_drvdata(pdev, pp);
 
@@ -383,11 +461,17 @@ static int pda_power_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&pp->supply_work, supply_work_func);
 	INIT_DELAYED_WORK(&pp->polling_work, polling_work_func);
 
+	pp->ac_draw = devm_regulator_get(dev, regulator_name);
+	if (IS_ERR(pp->ac_draw)) {
+		dev_dbg(dev, "couldn't get %s regulator\n", regulator_name);
+		pp->ac_draw = NULL;
+	}
+
 #if IS_ENABLED(CONFIG_USB_PHY)
 	pp->transceiver = devm_usb_get_phy(dev, USB_PHY_TYPE_USB2);
 #endif
 
-	if (pdata && pdata->is_ac_online) {
+	if ((pdata && pdata->is_ac_online) || pp->gpiod_ac_online) {
 		if (ac_irq >= 0) {
 			ret = devm_request_threaded_irq(dev, ac_irq,
 							NULL,
@@ -410,7 +494,7 @@ static int pda_power_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (pdata && pdata->is_usb_online) {
+	if ((pdata && pdata->is_usb_online) || pp->gpiod_usb_online) {
 		if (usb_irq >= 0) {
 			ret = devm_request_threaded_irq(dev, usb_irq,
 							NULL,
@@ -517,6 +601,7 @@ static int pda_power_resume(struct platform_device *pdev)
 static struct platform_driver pda_power_pdrv = {
 	.driver = {
 		.name = "pda-power",
+		.of_match_table = of_match_ptr(pda_power_of_ids),
 	},
 	.probe = pda_power_probe,
 	.remove = pda_power_remove,
