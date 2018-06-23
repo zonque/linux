@@ -432,7 +432,7 @@ static int pda_power_probe(struct platform_device *pdev)
 	}
 
 #if IS_ENABLED(CONFIG_USB_PHY)
-	if (!IS_ERR_OR_NULL(pp->transceiver) && pdata->use_otg_notifier) {
+	if (!IS_ERR_OR_NULL(pp->transceiver)) {
 		pp->otg_nb.notifier_call = otg_handle_notification;
 		ret = usb_register_notifier(pp->transceiver, &pp->otg_nb);
 		if (ret) {
