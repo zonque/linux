@@ -25,7 +25,6 @@
 struct pda_power {
 	struct device *dev;
 	struct pda_power_pdata *pdata;
-	int ac_irq, usb_irq;
 	struct delayed_work polling_work;
 	struct delayed_work supply_work;
 	struct power_supply *pda_psy_ac, *pda_psy_usb;
@@ -286,7 +285,7 @@ static int pda_power_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct pda_power *pp;
 	struct device *dev;
-	int ret = 0;
+	int ret, ac_irq, usb_irq;
 
 	dev = &pdev->dev;
 
@@ -350,19 +349,19 @@ static int pda_power_probe(struct platform_device *pdev)
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "ac");
 	if (res) {
-		pp->ac_irq = res->start;
+		ac_irq = res->start;
 		ac_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
 	} else {
-		pp->ac_irq = -1;
+		ac_irq = -1;
 		pp->polling = true;
 	}
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "usb");
 	if (res) {
-		pp->usb_irq = res->start;
+		usb_irq = res->start;
 		usb_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
 	} else {
-		pp->usb_irq = -1;
+		usb_irq = -1;
 		pp->polling = true;
 	}
 
@@ -381,8 +380,8 @@ static int pda_power_probe(struct platform_device *pdev)
 #endif
 
 	if (pdata->is_ac_online) {
-		if (pp->ac_irq >= 0) {
-			ret = devm_request_threaded_irq(dev, pp->ac_irq,
+		if (ac_irq >= 0) {
+			ret = devm_request_threaded_irq(dev, ac_irq,
 							NULL,
 							ac_power_changed_tread_fn,
 							ac_irq_flags, "ac", pp);
@@ -404,8 +403,8 @@ static int pda_power_probe(struct platform_device *pdev)
 	}
 
 	if (pdata->is_usb_online) {
-		if (pp->usb_irq >= 0) {
-			ret = devm_request_threaded_irq(dev, pp->usb_irq,
+		if (usb_irq >= 0) {
+			ret = devm_request_threaded_irq(dev, usb_irq,
 							NULL,
 							usb_power_changed_tread_fn,
 							usb_irq_flags, "usb", pp);
@@ -446,13 +445,13 @@ static int pda_power_probe(struct platform_device *pdev)
 				      msecs_to_jiffies(pp->polling_interval));
 	}
 
-	if (pp->ac_irq >= 0) {
-		enable_irq_wake(pp->ac_irq);
+	if (ac_irq >= 0) {
+		enable_irq_wake(ac_irq);
 		device_init_wakeup(dev, 1);
 	}
 
-	if (pp->usb_irq >= 0)
-		enable_irq_wake(pp->usb_irq);
+	if (usb_irq >= 0) {
+		enable_irq_wake(usb_irq);
 		device_init_wakeup(dev, 1);
 	}
 
