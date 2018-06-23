@@ -26,7 +26,6 @@ struct pda_power {
 	struct device *dev;
 	struct pda_power_pdata *pdata;
 	struct resource *ac_irq, *usb_irq;
-	struct delayed_work charger_work;
 	struct delayed_work polling_work;
 	struct delayed_work supply_work;
 	struct power_supply *pda_psy_ac, *pda_psy_usb;
@@ -51,7 +50,7 @@ struct pda_power {
 
 static inline unsigned int get_irq_flags(struct resource *res)
 {
-	return IRQF_SHARED | (res->flags & IRQF_TRIGGER_MASK);
+	return IRQF_SHARED | IRQF_ONESHOT | (res->flags & IRQF_TRIGGER_MASK);
 }
 
 enum {
@@ -197,48 +196,33 @@ static void psy_changed(struct pda_power *pp)
 	 */
 	cancel_delayed_work(&pp->supply_work);
 	schedule_delayed_work(&pp->supply_work,
-			      msecs_to_jiffies(pp->pdata->wait_for_charger));
+			      msecs_to_jiffies(pp->wait_for_charger));
 }
 
-static void charger_work_func(struct work_struct *work)
-{
-	struct pda_power *pp =
-		container_of(work, struct pda_power, charger_work.work);
-
-	update_status(pp);
-	psy_changed(pp);
-}
-
-static irqreturn_t ac_power_changed_isr(int irq, void *context)
+static irqreturn_t ac_power_changed_tread_fn(int irq, void *context)
 {
 	struct pda_power *pp = context;
 
-	pp->ac_status = PDA_PSY_TO_CHANGE;
+	usleep_range(pp->wait_for_status * 1000,
+		     pp->wait_for_status * 2000);
 
-	/*
-	 * Wait a bit before reading ac/usb line status and setting charger,
-	 * because ac status readings may lag from irq.
-	 */
-	cancel_delayed_work(&pp->charger_work);
-	schedule_delayed_work(&pp->charger_work,
-			      msecs_to_jiffies(pp->pdata->wait_for_status));
+	pp->ac_status = PDA_PSY_TO_CHANGE;
+	update_status(pp);
+	psy_changed(pp);
 
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t usb_power_changed_isr(int irq, void *context)
+static irqreturn_t usb_power_changed_tread_fn(int irq, void *context)
 {
 	struct pda_power *pp = context;
 
-	pp->usb_status = PDA_PSY_TO_CHANGE;
+	usleep_range(pp->wait_for_status * 1000,
+		     pp->wait_for_status * 2000);
 
-	/*
-	 * Wait a bit before reading ac/usb line status and setting charger,
-	 * because ac/usb status readings may lag from irq.
-	 */
-	cancel_delayed_work(&pp->charger_work);
-	schedule_delayed_work(&pp->charger_work,
-			      msecs_to_jiffies(pp->pdata->wait_for_status));
+	pp->usb_status = PDA_PSY_TO_CHANGE;
+	update_status(pp);
+	psy_changed(pp);
 
 	return IRQ_HANDLED;
 }
@@ -293,13 +277,8 @@ static int otg_handle_notification(struct notifier_block *nb,
 		return NOTIFY_OK;
 	}
 
-	/*
-	 * Wait a bit before reading ac/usb line status and setting charger,
-	 * because ac/usb status readings may lag from irq.
-	 */
-	cancel_delayed_work(&pp->charger_work);
-	schedule_delayed_work(&pp->charger_work,
-			      msecs_to_jiffies(pp->pdata->wait_for_status));
+	update_status(pp);
+	psy_changed(pp);
 
 	return NOTIFY_OK;
 }
@@ -363,7 +342,6 @@ static int pda_power_probe(struct platform_device *pdev)
 	if (!pdata->ac_max_uA)
 		pdata->ac_max_uA = 500000;
 
-	INIT_DELAYED_WORK(&pp->charger_work, charger_work_func);
 	INIT_DELAYED_WORK(&pp->supply_work, supply_work_func);
 
 	pp->ac_irq = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "ac");
@@ -395,10 +373,11 @@ static int pda_power_probe(struct platform_device *pdev)
 		}
 
 		if (pp->ac_irq) {
-			ret = devm_request_irq(dev, pp->ac_irq->start,
-					       ac_power_changed_isr,
-					       get_irq_flags(pp->ac_irq),
-					       pp->ac_irq->name, pp);
+			ret = devm_request_threaded_irq(dev, pp->ac_irq->start,
+						        NULL,
+						        ac_power_changed_tread_fn,
+						        get_irq_flags(pp->ac_irq),
+						        pp->ac_irq->name, pp);
 			if (ret) {
 				dev_err(dev, "request ac irq failed\n");
 				goto error_out;
@@ -420,10 +399,11 @@ static int pda_power_probe(struct platform_device *pdev)
 		}
 
 		if (pp->usb_irq) {
-			ret = devm_request_irq(dev, pp->usb_irq->start,
-					       usb_power_changed_isr,
-					       get_irq_flags(pp->usb_irq),
-					       pp->usb_irq->name, pp);
+			ret = devm_request_threaded_irq(dev, pp->usb_irq->start,
+						        NULL,
+						        usb_power_changed_tread_fn,
+						        get_irq_flags(pp->usb_irq),
+						        pp->usb_irq->name, pp);
 			if (ret) {
 				dev_err(dev, "request usb irq failed\n");
 				goto error_out;
@@ -473,7 +453,6 @@ static int pda_power_remove(struct platform_device *pdev)
 
 	if (pp->polling)
 		cancel_delayed_work_sync(&pp->polling_work);
-	cancel_delayed_work_sync(&pp->charger_work);
 	cancel_delayed_work_sync(&pp->supply_work);
 
 	if (pp->pdata->exit)
