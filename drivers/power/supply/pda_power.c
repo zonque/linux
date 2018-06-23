@@ -37,6 +37,11 @@ struct pda_power {
 	int ac_status;
 	int usb_status;
 
+	unsigned int wait_for_status; /* msecs, default is 500 */
+	unsigned int wait_for_charger; /* msecs, default is 500 */
+	unsigned int polling_interval; /* msecs, default is 2000 */
+	unsigned long ac_max_uA; /* current to draw when on AC */
+
 #if IS_ENABLED(CONFIG_USB_PHY)
 	struct usb_phy *transceiver;
 	struct notifier_block otg_nb;
@@ -133,7 +138,7 @@ static void update_status(struct pda_power *pp)
 
 static void update_charger(struct pda_power *pp)
 {
-	int max_uA = pp->pdata->ac_max_uA;
+	int max_uA = pp->ac_max_uA;
 
 	if (pp->pdata->set_charge) {
 		if (pp->new_ac_status > 0) {
@@ -247,7 +252,7 @@ static void polling_work_func(struct work_struct *work)
 
 	cancel_delayed_work(&pp->polling_work);
 	schedule_delayed_work(&pp->polling_work,
-			      msecs_to_jiffies(pp->pdata->polling_interval));
+			      msecs_to_jiffies(pp->polling_interval));
 }
 
 #if IS_ENABLED(CONFIG_USB_PHY)
@@ -321,23 +326,27 @@ static int pda_power_probe(struct platform_device *pdev)
 	pp->new_usb_status = -1;
 	pp->ac_status = -1;
 	pp->usb_status = -1;
+	pp->wait_for_status = pdata->wait_for_status;
+	pp->wait_for_charger = pdata->wait_for_charger;
+	pp->polling_interval = pdata->polling_interval;
+	pp->ac_max_uA = pdata->ac_max_uA;
 
 	platform_set_drvdata(pdev, pp);
 
 	update_status(pp);
 	update_charger(pp);
 
-	if (!pdata->wait_for_status)
-		pdata->wait_for_status = 500;
+	if (!pp->wait_for_status)
+		pp->wait_for_status = 500;
 
-	if (!pdata->wait_for_charger)
-		pdata->wait_for_charger = 500;
+	if (!pp->wait_for_charger)
+		pp->wait_for_charger = 500;
 
-	if (!pdata->polling_interval)
-		pdata->polling_interval = 2000;
+	if (!pp->polling_interval)
+		pp->polling_interval = 2000;
 
-	if (!pdata->ac_max_uA)
-		pdata->ac_max_uA = 500000;
+	if (!pp->ac_max_uA)
+		pp->ac_max_uA = 500000;
 
 	INIT_DELAYED_WORK(&pp->supply_work, supply_work_func);
 
@@ -441,7 +450,7 @@ static int pda_power_probe(struct platform_device *pdev)
 		INIT_DELAYED_WORK(&pp->polling_work, polling_work_func);
 		cancel_delayed_work(&pp->polling_work);
 		schedule_delayed_work(&pp->polling_work,
-				      msecs_to_jiffies(pdata->polling_interval));
+				      msecs_to_jiffies(pp->polling_interval));
 	}
 
 	if (pp->ac_irq >= 0 || pp->usb_irq >= 0)
