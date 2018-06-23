@@ -25,7 +25,7 @@
 struct pda_power {
 	struct device *dev;
 	struct pda_power_pdata *pdata;
-	struct resource *ac_irq, *usb_irq;
+	int ac_irq, usb_irq;
 	struct delayed_work polling_work;
 	struct delayed_work supply_work;
 	struct power_supply *pda_psy_ac, *pda_psy_usb;
@@ -47,11 +47,6 @@ struct pda_power {
 	int usb_wakeup_enabled;
 #endif
 };
-
-static inline unsigned int get_irq_flags(struct resource *res)
-{
-	return IRQF_SHARED | IRQF_ONESHOT | (res->flags & IRQF_TRIGGER_MASK);
-}
 
 enum {
 	PDA_PSY_OFFLINE = 0,
@@ -237,12 +232,12 @@ static void polling_work_func(struct work_struct *work)
 
 	update_status(pp);
 
-	if (!pp->ac_irq && pp->new_ac_status != pp->ac_status) {
+	if (pp->ac_irq < 0 && pp->new_ac_status != pp->ac_status) {
 		pp->ac_status = PDA_PSY_TO_CHANGE;
 		changed = 1;
 	}
 
-	if (!pp->usb_irq && pp->new_usb_status != pp->usb_status) {
+	if (pp->usb_irq < 0 && pp->new_usb_status != pp->usb_status) {
 		pp->usb_status = PDA_PSY_TO_CHANGE;
 		changed = 1;
 	}
@@ -286,8 +281,10 @@ static int otg_handle_notification(struct notifier_block *nb,
 
 static int pda_power_probe(struct platform_device *pdev)
 {
+	unsigned int ac_irq_flags, usb_irq_flags;
 	struct power_supply_config psy_cfg = {};
 	struct pda_power_pdata *pdata;
+	struct resource *res;
 	struct pda_power *pp;
 	struct device *dev;
 	int ret = 0;
@@ -344,8 +341,26 @@ static int pda_power_probe(struct platform_device *pdev)
 
 	INIT_DELAYED_WORK(&pp->supply_work, supply_work_func);
 
-	pp->ac_irq = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "ac");
-	pp->usb_irq = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "usb");
+	ac_irq_flags = IRQF_SHARED | IRQF_ONESHOT;
+	usb_irq_flags = IRQF_SHARED | IRQF_ONESHOT;
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "ac");
+	if (res) {
+		pp->ac_irq = res->start;
+		ac_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
+	} else {
+		pp->ac_irq = -1;
+		pp->polling = true;
+	}
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "usb");
+	if (res) {
+		pp->usb_irq = res->start;
+		usb_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
+	} else {
+		pp->usb_irq = -1;
+		pp->polling = true;
+	}
 
 	psy_cfg.drv_data = pp;
 
@@ -362,6 +377,17 @@ static int pda_power_probe(struct platform_device *pdev)
 #endif
 
 	if (pdata->is_ac_online) {
+		if (pp->ac_irq >= 0) {
+			ret = devm_request_threaded_irq(dev, pp->ac_irq,
+							NULL,
+							ac_power_changed_tread_fn,
+							ac_irq_flags, "ac", pp);
+			if (ret < 0) {
+				dev_err(dev, "Unable to request AC irq: %d\n", ret);
+				goto error_out;
+			}
+		}
+
 		pp->pda_psy_ac =
 			devm_power_supply_register(dev, &pda_psy_ac_desc,
 						   &psy_cfg);
@@ -371,23 +397,20 @@ static int pda_power_probe(struct platform_device *pdev)
 			ret = PTR_ERR(pp->pda_psy_ac);
 			goto error_out;
 		}
-
-		if (pp->ac_irq) {
-			ret = devm_request_threaded_irq(dev, pp->ac_irq->start,
-						        NULL,
-						        ac_power_changed_tread_fn,
-						        get_irq_flags(pp->ac_irq),
-						        pp->ac_irq->name, pp);
-			if (ret) {
-				dev_err(dev, "request ac irq failed\n");
-				goto error_out;
-			}
-		} else {
-			pp->polling = 1;
-		}
 	}
 
 	if (pdata->is_usb_online) {
+		if (pp->usb_irq >= 0) {
+			ret = devm_request_threaded_irq(dev, pp->usb_irq,
+							NULL,
+							usb_power_changed_tread_fn,
+							usb_irq_flags, "usb", pp);
+			if (ret) {
+				dev_err(dev, "Unable to request USB irq: %d\n", ret);
+				goto error_out;
+			}
+		}
+
 		pp->pda_psy_usb =
 			devm_power_supply_register(dev, &pda_psy_usb_desc,
 						   &psy_cfg);
@@ -396,20 +419,6 @@ static int pda_power_probe(struct platform_device *pdev)
 				pda_psy_usb_desc.name);
 			ret = PTR_ERR(pp->pda_psy_usb);
 			goto error_out;
-		}
-
-		if (pp->usb_irq) {
-			ret = devm_request_threaded_irq(dev, pp->usb_irq->start,
-						        NULL,
-						        usb_power_changed_tread_fn,
-						        get_irq_flags(pp->usb_irq),
-						        pp->usb_irq->name, pp);
-			if (ret) {
-				dev_err(dev, "request usb irq failed\n");
-				goto error_out;
-			}
-		} else {
-			pp->polling = 1;
 		}
 	}
 
@@ -435,7 +444,7 @@ static int pda_power_probe(struct platform_device *pdev)
 				      msecs_to_jiffies(pdata->polling_interval));
 	}
 
-	if (pp->ac_irq || pp->usb_irq)
+	if (pp->ac_irq >= 0 || pp->usb_irq >= 0)
 		device_init_wakeup(dev, 1);
 
 	return 0;
@@ -474,10 +483,10 @@ static int pda_power_suspend(struct platform_device *pdev, pm_message_t state)
 	}
 
 	if (device_may_wakeup(&pdev->dev)) {
-		if (pp->ac_irq)
-			pp->ac_wakeup_enabled = !enable_irq_wake(pp->ac_irq->start);
-		if (pp->usb_irq)
-			pp->usb_wakeup_enabled = !enable_irq_wake(pp->usb_irq->start);
+		if (pp->ac_irq >= 0)
+			pp->ac_wakeup_enabled = !enable_irq_wake(pp->ac_irq);
+		if (pp->usb_irq >= 0)
+			pp->usb_wakeup_enabled = !enable_irq_wake(pp->usb_irq);
 	}
 
 	return 0;
@@ -488,10 +497,10 @@ static int pda_power_resume(struct platform_device *pdev)
 	struct pda_power *pp = platform_get_drvdata(pdev);
 
 	if (device_may_wakeup(&pdev->dev)) {
-		if (pp->usb_irq && pp->usb_wakeup_enabled)
-			disable_irq_wake(pp->usb_irq->start);
-		if (pp->ac_irq && pp->ac_wakeup_enabled)
-			disable_irq_wake(pp->ac_irq->start);
+		if (pp->usb_irq >= 0 && pp->usb_wakeup_enabled)
+			disable_irq_wake(pp->usb_irq);
+		if (pp->ac_irq >= 0 && pp->ac_wakeup_enabled)
+			disable_irq_wake(pp->ac_irq);
 	}
 
 	if (pp->pdata->resume)
