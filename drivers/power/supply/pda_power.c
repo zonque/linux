@@ -55,7 +55,7 @@ enum {
 
 static bool pda_power_is_ac_online(struct pda_power *pp)
 {
-	if (pp->pdata->is_ac_online)
+	if (pp->pdata && pp->pdata->is_ac_online)
 		return pp->pdata->is_ac_online();
 
 #if IS_ENABLED(CONFIG_USB_PHY)
@@ -68,7 +68,7 @@ static bool pda_power_is_ac_online(struct pda_power *pp)
 
 static bool pda_power_is_usb_online(struct pda_power *pp)
 {
-	if (pp->pdata->is_usb_online)
+	if (pp->pdata && pp->pdata->is_usb_online)
 		return pp->pdata->is_usb_online();
 
 #if IS_ENABLED(CONFIG_USB_PHY)
@@ -134,7 +134,7 @@ static void update_charger(struct pda_power *pp)
 {
 	int max_uA = pp->ac_max_uA;
 
-	if (pp->pdata->set_charge) {
+	if (pp->pdata && pp->pdata->set_charge) {
 		if (pp->new_ac_status > 0) {
 			dev_dbg(pp->dev, "charger on (AC)\n");
 			pp->pdata->set_charge(PDA_POWER_CHARGE_AC);
@@ -282,7 +282,6 @@ static int pda_power_probe(struct platform_device *pdev)
 	unsigned int ac_irq_flags, usb_irq_flags;
 	struct power_supply_config psy_cfg = {};
 	struct pda_power_pdata *pdata;
-	struct resource *res;
 	struct pda_power *pp;
 	struct device *dev;
 	int ret, ac_irq, usb_irq;
@@ -299,14 +298,6 @@ static int pda_power_probe(struct platform_device *pdev)
 	if (!pp)
 		return -ENOMEM;
 
-	pdata = pdev->dev.platform_data;
-
-	if (pdata->init) {
-		ret = pdata->init(dev);
-		if (ret < 0)
-			return ret;
-	}
-
 	pp->ac_draw = devm_regulator_get(dev, "ac_draw");
 	if (IS_ERR(pp->ac_draw)) {
 		dev_dbg(dev, "couldn't get ac_draw regulator\n");
@@ -314,15 +305,60 @@ static int pda_power_probe(struct platform_device *pdev)
 	}
 
 	pp->dev = dev;
-	pp->pdata = pdata;
 	pp->new_ac_status = -1;
 	pp->new_usb_status = -1;
 	pp->ac_status = -1;
 	pp->usb_status = -1;
-	pp->wait_for_status = pdata->wait_for_status;
-	pp->wait_for_charger = pdata->wait_for_charger;
-	pp->polling_interval = pdata->polling_interval;
-	pp->ac_max_uA = pdata->ac_max_uA;
+
+	ac_irq = -1;
+	usb_irq = -1;
+
+	ac_irq_flags = IRQF_SHARED | IRQF_ONESHOT;
+	usb_irq_flags = IRQF_SHARED | IRQF_ONESHOT;
+
+	pdata = pdev->dev.platform_data;
+	if (pdata) {
+		struct resource *res;
+
+		pp->pdata = pdata;
+		pp->wait_for_status = pdata->wait_for_status;
+		pp->wait_for_charger = pdata->wait_for_charger;
+		pp->polling_interval = pdata->polling_interval;
+		pp->ac_max_uA = pdata->ac_max_uA;
+
+		if (pdata->supplied_to) {
+			psy_cfg.supplied_to = pdata->supplied_to;
+			psy_cfg.num_supplicants = pdata->num_supplicants;
+		}
+
+		if (pdata->init) {
+			ret = pdata->init(dev);
+			if (ret < 0)
+				return ret;
+		}
+
+		res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "ac");
+		if (res) {
+			ac_irq = res->start;
+			ac_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
+		}
+
+		res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "usb");
+		if (res) {
+			usb_irq = res->start;
+			usb_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
+		}
+	} else {
+		dev_err(dev, "No platform data\n");
+		return -EINVAL;
+	}
+
+	psy_cfg.drv_data = pp;
+
+	if (!psy_cfg.supplied_to) {
+		psy_cfg.supplied_to = pda_power_supplied_to;
+		psy_cfg.num_supplicants = ARRAY_SIZE(pda_power_supplied_to);
+	}
 
 	platform_set_drvdata(pdev, pp);
 
@@ -341,45 +377,17 @@ static int pda_power_probe(struct platform_device *pdev)
 	if (!pp->ac_max_uA)
 		pp->ac_max_uA = 500000;
 
+	if (ac_irq < 0 || usb_irq < 0)
+		pp->polling = true;
+
 	INIT_DELAYED_WORK(&pp->supply_work, supply_work_func);
 	INIT_DELAYED_WORK(&pp->polling_work, polling_work_func);
-
-	ac_irq_flags = IRQF_SHARED | IRQF_ONESHOT;
-	usb_irq_flags = IRQF_SHARED | IRQF_ONESHOT;
-
-	res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "ac");
-	if (res) {
-		ac_irq = res->start;
-		ac_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
-	} else {
-		ac_irq = -1;
-		pp->polling = true;
-	}
-
-	res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "usb");
-	if (res) {
-		usb_irq = res->start;
-		usb_irq_flags |= res->flags & IRQF_TRIGGER_MASK;
-	} else {
-		usb_irq = -1;
-		pp->polling = true;
-	}
-
-	psy_cfg.drv_data = pp;
-
-	if (pdata->supplied_to) {
-		psy_cfg.supplied_to = pdata->supplied_to;
-		psy_cfg.num_supplicants = pdata->num_supplicants;
-	} else {
-		psy_cfg.supplied_to = pda_power_supplied_to;
-		psy_cfg.num_supplicants = ARRAY_SIZE(pda_power_supplied_to);
-	}
 
 #if IS_ENABLED(CONFIG_USB_PHY)
 	pp->transceiver = devm_usb_get_phy(dev, USB_PHY_TYPE_USB2);
 #endif
 
-	if (pdata->is_ac_online) {
+	if (pdata && pdata->is_ac_online) {
 		if (ac_irq >= 0) {
 			ret = devm_request_threaded_irq(dev, ac_irq,
 							NULL,
@@ -402,7 +410,7 @@ static int pda_power_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (pdata->is_usb_online) {
+	if (pdata && pdata->is_usb_online) {
 		if (usb_irq >= 0) {
 			ret = devm_request_threaded_irq(dev, usb_irq,
 							NULL,
@@ -458,7 +466,7 @@ static int pda_power_probe(struct platform_device *pdev)
 	return 0;
 
 error_out:
-	if (pdata->exit)
+	if (pdata && pdata->exit)
 		pdata->exit(dev);
 
 	return ret;
@@ -471,7 +479,7 @@ static int pda_power_remove(struct platform_device *pdev)
 	cancel_delayed_work_sync(&pp->polling_work);
 	cancel_delayed_work_sync(&pp->supply_work);
 
-	if (pp->pdata->exit)
+	if (pp->pdata && pp->pdata->exit)
 		pp->pdata->exit(&pdev->dev);
 
 	return 0;
@@ -482,7 +490,7 @@ static int pda_power_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct pda_power *pp = platform_get_drvdata(pdev);
 
-	if (pp->pdata->suspend) {
+	if (pp->pdata && pp->pdata->suspend) {
 		int ret = pp->pdata->suspend(state);
 
 		if (ret)
@@ -496,7 +504,7 @@ static int pda_power_resume(struct platform_device *pdev)
 {
 	struct pda_power *pp = platform_get_drvdata(pdev);
 
-	if (pp->pdata->resume)
+	if (pp->pdata && pp->pdata->resume)
 		return pp->pdata->resume();
 
 	return 0;
