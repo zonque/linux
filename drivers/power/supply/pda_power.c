@@ -318,8 +318,7 @@ static int pda_power_probe(struct platform_device *pdev)
 	if (pdev->id != -1) {
 		dev_err(dev, "it's meaningless to register several "
 			"pda_powers; use id = -1\n");
-		ret = -EINVAL;
-		goto wrongid;
+		return -EINVAL;
 	}
 
 	pp = devm_kzalloc(dev, sizeof(*pp), GFP_KERNEL);
@@ -331,10 +330,10 @@ static int pda_power_probe(struct platform_device *pdev)
 	if (pdata->init) {
 		ret = pdata->init(dev);
 		if (ret < 0)
-			goto init_failed;
+			return ret;
 	}
 
-	pp->ac_draw = regulator_get(dev, "ac_draw");
+	pp->ac_draw = devm_regulator_get(dev, "ac_draw");
 	if (IS_ERR(pp->ac_draw)) {
 		dev_dbg(dev, "couldn't get ac_draw regulator\n");
 		pp->ac_draw = NULL;
@@ -381,27 +380,28 @@ static int pda_power_probe(struct platform_device *pdev)
 	}
 
 #if IS_ENABLED(CONFIG_USB_PHY)
-	pp->transceiver = usb_get_phy(USB_PHY_TYPE_USB2);
+	pp->transceiver = devm_usb_get_phy(dev, USB_PHY_TYPE_USB2);
 #endif
 
 	if (pdata->is_ac_online) {
 		pp->pda_psy_ac =
-			power_supply_register(&pdev->dev,
-					      &pda_psy_ac_desc, &psy_cfg);
+			devm_power_supply_register(dev, &pda_psy_ac_desc,
+						   &psy_cfg);
 		if (IS_ERR(pp->pda_psy_ac)) {
 			dev_err(dev, "failed to register %s power supply\n",
 				pda_psy_ac_desc.name);
 			ret = PTR_ERR(pp->pda_psy_ac);
-			goto ac_supply_failed;
+			goto error_out;
 		}
 
 		if (pp->ac_irq) {
-			ret = request_irq(pp->ac_irq->start, ac_power_changed_isr,
-					  get_irq_flags(pp->ac_irq),
-					  pp->ac_irq->name, pp);
+			ret = devm_request_irq(dev, pp->ac_irq->start,
+					       ac_power_changed_isr,
+					       get_irq_flags(pp->ac_irq),
+					       pp->ac_irq->name, pp);
 			if (ret) {
 				dev_err(dev, "request ac irq failed\n");
-				goto ac_irq_failed;
+				goto error_out;
 			}
 		} else {
 			pp->polling = 1;
@@ -410,22 +410,23 @@ static int pda_power_probe(struct platform_device *pdev)
 
 	if (pdata->is_usb_online) {
 		pp->pda_psy_usb =
-			power_supply_register(dev, &pda_psy_usb_desc,
-					      &psy_cfg);
+			devm_power_supply_register(dev, &pda_psy_usb_desc,
+						   &psy_cfg);
 		if (IS_ERR(pp->pda_psy_usb)) {
 			dev_err(dev, "failed to register %s power supply\n",
 				pda_psy_usb_desc.name);
 			ret = PTR_ERR(pp->pda_psy_usb);
-			goto usb_supply_failed;
+			goto error_out;
 		}
 
 		if (pp->usb_irq) {
-			ret = request_irq(pp->usb_irq->start, usb_power_changed_isr,
-					  get_irq_flags(pp->usb_irq),
-					  pp->usb_irq->name, pp);
+			ret = devm_request_irq(dev, pp->usb_irq->start,
+					       usb_power_changed_isr,
+					       get_irq_flags(pp->usb_irq),
+					       pp->usb_irq->name, pp);
 			if (ret) {
 				dev_err(dev, "request usb irq failed\n");
-				goto usb_irq_failed;
+				goto error_out;
 			}
 		} else {
 			pp->polling = 1;
@@ -438,7 +439,7 @@ static int pda_power_probe(struct platform_device *pdev)
 		ret = usb_register_notifier(pp->transceiver, &pp->otg_nb);
 		if (ret) {
 			dev_err(dev, "failure to register otg notifier\n");
-			goto otg_reg_notifier_failed;
+			goto error_out;
 		}
 		pp->polling = 0;
 	} else {
@@ -459,33 +460,10 @@ static int pda_power_probe(struct platform_device *pdev)
 
 	return 0;
 
-#if IS_ENABLED(CONFIG_USB_PHY)
-otg_reg_notifier_failed:
-	if (pdata->is_usb_online && pp->usb_irq)
-		free_irq(pp->usb_irq->start, pda_psy_usb);
-#endif
-usb_irq_failed:
-	if (pdata->is_usb_online)
-		power_supply_unregister(pp->pda_psy_usb);
-usb_supply_failed:
-	if (pdata->is_ac_online && pp->ac_irq)
-		free_irq(pp->ac_irq->start, pp->pda_psy_ac);
-#if IS_ENABLED(CONFIG_USB_PHY)
-	if (!IS_ERR_OR_NULL(pp->transceiver))
-		usb_put_phy(pp->transceiver);
-#endif
-ac_irq_failed:
-	if (pdata->is_ac_online)
-		power_supply_unregister(pp->pda_psy_ac);
-ac_supply_failed:
-	if (pp->ac_draw) {
-		regulator_put(pp->ac_draw);
-		pp->ac_draw = NULL;
-	}
+error_out:
 	if (pdata->exit)
 		pdata->exit(dev);
-init_failed:
-wrongid:
+
 	return ret;
 }
 
@@ -493,28 +471,11 @@ static int pda_power_remove(struct platform_device *pdev)
 {
 	struct pda_power *pp = platform_get_drvdata(pdev);
 
-	if (pp->pdata->is_usb_online && pp->usb_irq)
-		free_irq(pp->usb_irq->start, pp->pda_psy_usb);
-	if (pp->pdata->is_ac_online && pp->ac_irq)
-		free_irq(pp->ac_irq->start, pp->pda_psy_ac);
-
 	if (pp->polling)
 		cancel_delayed_work_sync(&pp->polling_work);
 	cancel_delayed_work_sync(&pp->charger_work);
 	cancel_delayed_work_sync(&pp->supply_work);
 
-	if (pp->pdata->is_usb_online)
-		power_supply_unregister(pp->pda_psy_usb);
-	if (pp->pdata->is_ac_online)
-		power_supply_unregister(pp->pda_psy_ac);
-#if IS_ENABLED(CONFIG_USB_PHY)
-	if (!IS_ERR_OR_NULL(pp->transceiver))
-		usb_put_phy(pp->transceiver);
-#endif
-	if (pp->ac_draw) {
-		regulator_put(pp->ac_draw);
-		pp->ac_draw = NULL;
-	}
 	if (pp->pdata->exit)
 		pp->pdata->exit(&pdev->dev);
 
