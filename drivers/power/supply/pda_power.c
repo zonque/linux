@@ -433,7 +433,7 @@ static int pda_power_probe(struct platform_device *pdev)
 			return ret;
 
 		psy_cfg.of_node = dev->of_node;
-		regulator_name = "ac";
+		regulator_name = "ac-draw";
 	}
 
 	psy_cfg.drv_data = pp;
@@ -461,8 +461,11 @@ static int pda_power_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&pp->supply_work, supply_work_func);
 	INIT_DELAYED_WORK(&pp->polling_work, polling_work_func);
 
-	pp->ac_draw = devm_regulator_get(dev, regulator_name);
+	pp->ac_draw = devm_regulator_get_optional(dev, regulator_name);
 	if (IS_ERR(pp->ac_draw)) {
+		if (PTR_ERR(pp->ac_draw) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
 		dev_dbg(dev, "couldn't get %s regulator\n", regulator_name);
 		pp->ac_draw = NULL;
 	}
