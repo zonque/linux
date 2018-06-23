@@ -232,12 +232,12 @@ static void polling_work_func(struct work_struct *work)
 
 	update_status(pp);
 
-	if (pp->ac_irq < 0 && pp->new_ac_status != pp->ac_status) {
+	if (pp->new_ac_status != pp->ac_status) {
 		pp->ac_status = PDA_PSY_TO_CHANGE;
 		changed = true;
 	}
 
-	if (pp->usb_irq < 0 && pp->new_usb_status != pp->usb_status) {
+	if (pp->new_usb_status != pp->usb_status) {
 		pp->usb_status = PDA_PSY_TO_CHANGE;
 		changed = true;
 	}
