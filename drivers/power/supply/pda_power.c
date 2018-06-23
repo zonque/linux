@@ -46,11 +46,6 @@ struct pda_power {
 	struct usb_phy *transceiver;
 	struct notifier_block otg_nb;
 #endif
-
-#ifdef CONFIG_PM
-	int ac_wakeup_enabled;
-	int usb_wakeup_enabled;
-#endif
 };
 
 enum {
@@ -451,8 +446,15 @@ static int pda_power_probe(struct platform_device *pdev)
 				      msecs_to_jiffies(pp->polling_interval));
 	}
 
-	if (pp->ac_irq >= 0 || pp->usb_irq >= 0)
+	if (pp->ac_irq >= 0) {
+		enable_irq_wake(pp->ac_irq);
 		device_init_wakeup(dev, 1);
+	}
+
+	if (pp->usb_irq >= 0)
+		enable_irq_wake(pp->usb_irq);
+		device_init_wakeup(dev, 1);
+	}
 
 	return 0;
 
@@ -488,26 +490,12 @@ static int pda_power_suspend(struct platform_device *pdev, pm_message_t state)
 			return ret;
 	}
 
-	if (device_may_wakeup(&pdev->dev)) {
-		if (pp->ac_irq >= 0)
-			pp->ac_wakeup_enabled = !enable_irq_wake(pp->ac_irq);
-		if (pp->usb_irq >= 0)
-			pp->usb_wakeup_enabled = !enable_irq_wake(pp->usb_irq);
-	}
-
 	return 0;
 }
 
 static int pda_power_resume(struct platform_device *pdev)
 {
 	struct pda_power *pp = platform_get_drvdata(pdev);
-
-	if (device_may_wakeup(&pdev->dev)) {
-		if (pp->usb_irq >= 0 && pp->usb_wakeup_enabled)
-			disable_irq_wake(pp->usb_irq);
-		if (pp->ac_irq >= 0 && pp->ac_wakeup_enabled)
-			disable_irq_wake(pp->ac_irq);
-	}
 
 	if (pp->pdata->resume)
 		return pp->pdata->resume();
