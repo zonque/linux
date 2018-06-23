@@ -250,7 +250,6 @@ static void polling_work_func(struct work_struct *work)
 	if (changed)
 		psy_changed(pp);
 
-	cancel_delayed_work(&pp->polling_work);
 	schedule_delayed_work(&pp->polling_work,
 			      msecs_to_jiffies(pp->polling_interval));
 }
@@ -349,6 +348,7 @@ static int pda_power_probe(struct platform_device *pdev)
 		pp->ac_max_uA = 500000;
 
 	INIT_DELAYED_WORK(&pp->supply_work, supply_work_func);
+	INIT_DELAYED_WORK(&pp->polling_work, polling_work_func);
 
 	ac_irq_flags = IRQF_SHARED | IRQF_ONESHOT;
 	usb_irq_flags = IRQF_SHARED | IRQF_ONESHOT;
@@ -447,8 +447,6 @@ static int pda_power_probe(struct platform_device *pdev)
 
 	if (pp->polling) {
 		dev_dbg(dev, "will poll for status\n");
-		INIT_DELAYED_WORK(&pp->polling_work, polling_work_func);
-		cancel_delayed_work(&pp->polling_work);
 		schedule_delayed_work(&pp->polling_work,
 				      msecs_to_jiffies(pp->polling_interval));
 	}
@@ -469,8 +467,7 @@ static int pda_power_remove(struct platform_device *pdev)
 {
 	struct pda_power *pp = platform_get_drvdata(pdev);
 
-	if (pp->polling)
-		cancel_delayed_work_sync(&pp->polling_work);
+	cancel_delayed_work_sync(&pp->polling_work);
 	cancel_delayed_work_sync(&pp->supply_work);
 
 	if (pp->pdata->exit)
